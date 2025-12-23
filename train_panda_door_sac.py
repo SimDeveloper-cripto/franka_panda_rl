@@ -1,15 +1,10 @@
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 # train_panda_door_sac.py
 # Franka Panda opens a door in robosuite (Door Opening Task) using SAC (Stable-Baselines3 + Gymnasium)
 
-# [RUN]  python train_panda_door_sac.py --total-steps 2000000 --num-envs 2
-# [EVAL] python train_panda_door_sac.py --play --model runs/door_sac/best_model.zip
-
-# TODO 0 RAFFINARE L'APERTURA DELLA PORTA (TROVARE MIGLIORE EFFICACIA). CI DEVONO ESSERE MENNO MOVIMENTI INUTILI (ORA NE FA DI MENO).
-    # UNA VOLTA APERTA IL BRACCIO DEVE STACCARSI E TORNARE ALLA SUA POSIZIONE INIZIALE
-# TODO 1 CHIUSURA PORTA
-# TODO 2 UNICA SEQUENZA
-# TODO 3 GENERALIZZAZIONE CON CURRICULUM
+# TODO CHIUSURA PORTA
+# TODO CURRICULUM
+# TODO UNICA SEQUENZA
 
 from __future__ import annotations
 
@@ -28,28 +23,34 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CheckpointCallback, CallbackList
 
+def _has_tensorboard() -> bool:
+    try:
+        import tensorboard
+        return True
+    except Exception as e:
+        print(e)
+        return False
 
 @dataclass
 class TrainConfig:
-    seed   : int = 123  # or maybe 42 (prob. better)
+    seed   : int = 42  # 123
     run_dir: str = "runs/door_sac"
     tb_dir : str = "runs/tb"
 
-    env_name            : str   = "Door"  # Task
-    robot               : str   = "Panda"
-    controller          : str   = "OSC_POSE"
-    horizon             : int   = 500
-    control_freq        : int   = 20
+    env_name    : str = "Door"
+    robot       : str = "Panda"
+    horizon     : int = 500
+    control_freq: int = 20
+
     reward_shaping      : bool  = True
     reward_scale        : float = 1.0
     use_object_obs      : bool  = True
     use_camera_obs      : bool  = False
-    terminate_on_success: bool  = False  # !! robosuite typically runs fixed horizon
+    terminate_on_success: bool  = False
 
     num_envs    : int  = 8
     vecnormalize: bool = True
 
-    # SAC Hyperparams
     total_steps    : int   = 3_000_000
     learning_rate  : float = 3e-4
     buffer_size    : int   = 1_000_000
@@ -64,8 +65,17 @@ class TrainConfig:
 
     eval_freq      : int = 50_000
     n_eval_episodes: int = 10
-    checkpoint_freq: int = 100_000
+    checkpoint_freq: int = 200_000
 
+    success_fraction: float = 0.92
+
+    w_progress   : float = 2.0
+    w_delta      : float = 8.0
+    w_action     : float = 0.02
+    time_penalty : float = 0.002
+    success_bonus: float = 5.0
+
+    debug_print_every: int = 200
 
 class RoboSuiteDoorGymnasiumEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 20}
@@ -78,63 +88,49 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         import robosuite as suite
         from robosuite.controllers import load_composite_controller_config
 
-        controller_config = load_composite_controller_config(controller="BASIC")  # Composite controller
-        # Panda:
-            # OSC_POSE 'arm'
-            # GRIP     'gripper'
-        # Since version 1.5.1 OSC_POSE doesn't need to be forced
+        controller_config = load_composite_controller_config(controller="BASIC")
 
-        self._rs_env = suite.make(
-            env_name=cfg.env_name,
-            robots=cfg.robot,
-            controller_configs=controller_config,
-            has_renderer=(render_mode == "human"),
-            has_offscreen_renderer=False,
-            use_camera_obs=cfg.use_camera_obs,
-            use_object_obs=cfg.use_object_obs,
-            reward_shaping=cfg.reward_shaping,
-            reward_scale=cfg.reward_scale,
-            horizon=cfg.horizon,
-            control_freq=cfg.control_freq,
-        )
+        self._rs_env = suite.make(env_name=cfg.env_name, robots=cfg.robot, controller_configs=controller_config,
+            has_renderer=(render_mode == "human"), has_offscreen_renderer=False, use_camera_obs=cfg.use_camera_obs, use_object_obs=cfg.use_object_obs,
+            reward_shaping=cfg.reward_shaping, reward_scale=cfg.reward_scale, horizon=cfg.horizon, control_freq=cfg.control_freq)
 
-        """
-        jid = self._rs_env.sim.model.joint_name2id("Door_hinge")
-        print("Door hinge limits:", self._rs_env.sim.model.jnt_range[jid]) --> [0.0, 0.418879]
-        """
-        self._door_hinge_name     = "Door_hinge" # Robosuite limita l'apertura a 22°-23° (0.41-0.42 rad)
+        self._door_hinge_name     = "Door_hinge"
         self._door_hinge_qpos_adr = None
-
         for name, adr in zip(self._rs_env.sim.model.joint_names, self._rs_env.sim.model.jnt_qposadr):
             if name == self._door_hinge_name:
                 self._door_hinge_qpos_adr = int(adr)
                 break
-
         if self._door_hinge_qpos_adr is None:
-            raise RuntimeError("Door_hinge joint not found!")
+            raise RuntimeError("Door_hinge joint not found! Check robosuite model joint names.")
 
-        self._door_success_angle = 1.2  # radians ≈ 69°
-        self._door_max_angle     = 1.4  # shaping
-        self._success_latched    = False
+        # Read joint limits
+        jid            = self._rs_env.sim.model.joint_name2id(self._door_hinge_name)
+        jmin, jmax     = self._rs_env.sim.model.jnt_range[jid]
+        self._door_min = float(jmin)
+        self._door_max = float(jmax)
+        if not np.isfinite(self._door_min) or not np.isfinite(self._door_max) or self._door_max <= self._door_min:
+            raise RuntimeError(f"Invalid door hinge limits: [{self._door_min}, {self._door_max}]")
 
-        # Action space
+        self._success_angle   = self._door_min + float(cfg.success_fraction) * (self._door_max - self._door_min)
+        self._success_latched = False
+
         low, high         = self._rs_env.action_spec
         self.action_space = spaces.Box(low=low.astype(np.float32), high=high.astype(np.float32), dtype=np.float32)
 
-        obs                    = self._rs_env.reset()
-        self._obs_keys         = self._select_obs_keys(obs)
-        flat                   = self._flatten_obs(obs)
+        obs            = self._rs_env.reset()
+        self._obs_keys = self._select_obs_keys(obs)
+        flat           = self._flatten_obs(obs)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=flat.shape, dtype=np.float32)
 
-        self._step_count = 0
+        self._step_count      = 0
+        self._prev_door_angle = None
 
     @staticmethod
     def _select_obs_keys(obs: Dict[str, Any]) -> List[str]:
-        keys = []
+        keys: List[str] = []
         for k, v in obs.items():
-            if isinstance(v, np.ndarray) and v.dtype != np.object_:
-                if v.ndim == 1:
-                    keys.append(k)
+            if isinstance(v, np.ndarray) and v.dtype != np.object_ and v.ndim == 1:
+                keys.append(k)
         keys.sort()
         if not keys:
             raise RuntimeError(
@@ -147,70 +143,79 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         parts = [obs[k].ravel().astype(np.float32) for k in self._obs_keys]
         return np.concatenate(parts, axis=0)
 
+    def _get_door_angle(self) -> float:
+        a = float(self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr])
+        return float(np.clip(a, self._door_min, self._door_max))
+
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         if seed is not None:
             np.random.seed(seed)
-        self._success_latched = False
 
-        obs              = self._rs_env.reset()
-        self._step_count = 0
-        info             = {"obs_keys": self._obs_keys}
+        obs                   = self._rs_env.reset()
+        self._step_count      = 0
+        self._success_latched = False
+        self._prev_door_angle = self._get_door_angle()
+
+        info = {
+            "obs_keys": self._obs_keys,
+            "door_min": self._door_min,
+            "door_max": self._door_max,
+            "success_angle": self._success_angle,
+        }
         return self._flatten_obs(obs), info
 
-    # Reward & SuccessRate
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, -1.0, 1.0)
 
-        if self._success_latched:
-            action[:] = 0.0
-
-        obs, reward, done, info = self._rs_env.step(action)
+        obs, _rs_reward, rs_done, info = self._rs_env.step(action)
         self._step_count += 1
 
-        """
-        is_success = False
-        if hasattr(self._rs_env, "_check_success"):
-            try:
-                is_success = bool(self._rs_env._check_success())  # robosuite envs generally expose _check_success()
-            except Exception as e:
-                print(str(e))
-                is_success = False
-        """
-        door_angle = float(self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr])
-        if door_angle > 0.35:
-            reward -= 0.05 * float(np.linalg.norm(action))
+        door_angle = self._get_door_angle()
+        prev_angle = float(self._prev_door_angle) if self._prev_door_angle is not None else door_angle
+        delta      = door_angle - prev_angle
 
-        if door_angle < 0.4:
-            reward += 2.0 * (door_angle / 0.4)
-        else:
-            reward += 2.0
-            reward += 6.0 * ((door_angle - 0.4) / (self._door_success_angle - 0.4))
+        self._prev_door_angle = door_angle
 
-        reward = float(np.clip(reward, -10.0, 10.0))
+        denom    = (self._door_max - self._door_min)
+        progress = (door_angle - self._door_min) / denom
+        progress = float(np.clip(progress, 0.0, 1.0))
 
-        if door_angle >= self._door_success_angle:
+        is_success = bool(door_angle >= self._success_angle)
+
+        r = 0.0
+        r += self.cfg.w_progress * progress
+        r += self.cfg.w_delta * float(delta)
+
+        r -= self.cfg.w_action * float(np.linalg.norm(action))
+        r -= self.cfg.time_penalty
+
+        if is_success and not self._success_latched:
+            r += self.cfg.success_bonus
             self._success_latched = True
 
-        if self._step_count % 100 == 0:
-            print(
-                f"[DOOR] angle={door_angle:.3f} rad  "
-                f"progress={(door_angle / self._door_success_angle):.2f}  "
-                f"latched={self._success_latched}"
-            )
+        reward = float(np.clip(r, -10.0, 10.0))
 
-        is_success = self._success_latched
         terminated = bool(is_success and self.cfg.terminate_on_success)
         truncated  = bool(self._step_count >= self.cfg.horizon)
 
-        if done and not terminated:
+        if bool(rs_done) and not terminated:
             truncated = True
 
-        info               = dict(info or {})
-        info["is_success"] = is_success
-        info["step_count"] = self._step_count
-        return self._flatten_obs(obs), float(reward), terminated, truncated, info
+        if self.cfg.debug_print_every > 0 and (self._step_count % self.cfg.debug_print_every == 0):
+            print(
+                f"[DOOR] angle={door_angle:.4f} rad "
+                f"(min={self._door_min:.4f}, max={self._door_max:.4f}, succ={self._success_angle:.4f}) "
+                f"progress={progress:.2f} delta={delta:+.4f} success={int(is_success)}"
+            )
+
+        info                  = dict(info or {})
+        info["is_success"]    = is_success
+        info["door_angle"]    = door_angle
+        info["door_progress"] = progress
+        info["step_count"]    = self._step_count
+        return self._flatten_obs(obs), reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode != "human":
@@ -228,7 +233,6 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
             print(str(e))
             pass
 
-# Callbacks
 class SuccessRateCallback(BaseCallback):
     def __init__(self, log_every: int = 5000, verbose: int = 0):
         super().__init__(verbose)
@@ -238,7 +242,7 @@ class SuccessRateCallback(BaseCallback):
         self._ep_success = None
 
     def _on_training_start(self) -> None:
-        n_envs           = getattr(self.training_env, "num_envs", 1)
+        n_envs = getattr(self.training_env, "num_envs", 1)
         self._ep_success = np.zeros(n_envs, dtype=bool)
 
     def _on_step(self) -> bool:
@@ -266,12 +270,14 @@ class SuccessRateCallback(BaseCallback):
 
         return True
 
-def make_env_fn(cfg: TrainConfig, rank: int = 0, render_mode: Optional[str] = None):
+
+def make_env_fn(cfg: TrainConfig, render_mode: Optional[str] = None):
     def _init():
         env = RoboSuiteDoorGymnasiumEnv(cfg, render_mode=render_mode)
         env = Monitor(env)
         return env
     return _init
+
 
 def ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
@@ -287,20 +293,24 @@ def train(cfg: TrainConfig):
     ensure_dir(cfg.tb_dir)
     save_config(cfg, os.path.join(cfg.run_dir, "config.json"))
 
-    vec = DummyVecEnv([make_env_fn(cfg, rank=i, render_mode=None) for i in range(cfg.num_envs)])
+    vec = DummyVecEnv([make_env_fn(cfg, render_mode=None) for _ in range(cfg.num_envs)])
     vec = VecMonitor(vec)
 
     if cfg.vecnormalize:
         vec = VecNormalize(vec, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    eval_env = DummyVecEnv([make_env_fn(cfg, 0)])
+    eval_env = DummyVecEnv([make_env_fn(cfg, render_mode=None)])
     eval_env = VecMonitor(eval_env)
     if cfg.vecnormalize:
-        eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
-        # Eval stats synced with Training stats
+        eval_env         = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
         eval_env.obs_rms = vec.obs_rms
 
     policy_kwargs = dict(net_arch=list(cfg.policy_net_arch))
+
+    tb_log = cfg.tb_dir if _has_tensorboard() else None
+    if tb_log is None:
+        print("[INFO] tensorboard not found: disabling tensorboard_log to avoid SB3 crash. "
+              "If you want it: pip install tensorboard")
 
     model = SAC(
         policy="MlpPolicy",
@@ -316,30 +326,33 @@ def train(cfg: TrainConfig):
         ent_coef=cfg.ent_coef,
         policy_kwargs=policy_kwargs,
         verbose=1,
-        tensorboard_log=cfg.tb_dir,
+        tensorboard_log=tb_log,
         seed=cfg.seed,
     )
 
-    callbacks = [SuccessRateCallback(log_every=5000), CheckpointCallback(
-        save_freq=cfg.checkpoint_freq // max(1, cfg.num_envs),
-        save_path=os.path.join(cfg.run_dir, "checkpoints"),
-        name_prefix="door_sac",
-        save_replay_buffer=True,
-        save_vecnormalize=True,
-    ), EvalCallback(
-        eval_env,
-        best_model_save_path=cfg.run_dir,
-        log_path=os.path.join(cfg.run_dir, "eval"),
-        eval_freq=cfg.eval_freq // max(1, cfg.num_envs),
-        n_eval_episodes=cfg.n_eval_episodes,
-        deterministic=True,
-        render=False,
-    )]
+    callbacks = [
+        SuccessRateCallback(log_every=5000),
+        CheckpointCallback(
+            save_freq=max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
+            save_path=os.path.join(cfg.run_dir, "checkpoints"),
+            name_prefix="door_sac",
+            save_replay_buffer=True,
+            save_vecnormalize=True,
+        ),
+        EvalCallback(
+            eval_env,
+            best_model_save_path=cfg.run_dir,
+            log_path=os.path.join(cfg.run_dir, "eval"),
+            eval_freq=max(1, cfg.eval_freq // max(1, cfg.num_envs)),
+            n_eval_episodes=cfg.n_eval_episodes,
+            deterministic=True,
+            render=False,
+        ),
+    ]
 
-    cb = CallbackList(callbacks)
-    model.learn(total_timesteps=cfg.total_steps, callback=cb, progress_bar=True)
-
+    model.learn(total_timesteps=cfg.total_steps, callback=CallbackList(callbacks), progress_bar=True)
     model.save(os.path.join(cfg.run_dir, "final_model"))
+
     if cfg.vecnormalize:
         vec.save(os.path.join(cfg.run_dir, "vecnormalize.pkl"))
 
@@ -362,17 +375,13 @@ def play(model_path: str, cfg: TrainConfig):
     obs = venv.reset()
 
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
+    alpha       = 0.2
 
-    arm_scale = np.array([0.15, 0.15, 0.15, 0.25, 0.25, 0.25], dtype=np.float32)
-    alpha     = 0.2  # Smoothing (0.1 – 0.3)
     while True:
         action, _ = model.predict(obs, deterministic=True)
+        action    = action.astype(np.float32, copy=True)
 
-        action = action.copy()
-
-        arm_dofs = min(6, action.shape[1])
-        action[:, :arm_dofs] *= arm_scale[:arm_dofs]
-
+        # Smoothing
         action      = alpha * action + (1.0 - alpha) * prev_action
         prev_action = action.copy()
 
@@ -382,7 +391,6 @@ def play(model_path: str, cfg: TrainConfig):
         if np.any(dones):
             obs = venv.reset()
             prev_action[:] = 0.0
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
@@ -395,13 +403,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--play",  action="store_true",  help="Run a trained model with on-screen rendering")
     p.add_argument("--model", type=str, default="", help="Path to model zip (for --play)")
 
-    # A few env knobs that matter in practice
     p.add_argument("--horizon",      type=int, default=500)
     p.add_argument("--control-freq", type=int, default=20)
     p.add_argument("--no-reward-shaping",    action="store_true")
     p.add_argument("--terminate-on-success", action="store_true")
-    return p.parse_args()
 
+    p.add_argument("--success-fraction", type=float, default=0.92, help="Success threshold as fraction of hinge range")
+    return p.parse_args()
 
 def main():
     args = parse_args()
@@ -415,6 +423,7 @@ def main():
         control_freq=args.control_freq,
         reward_shaping=not args.no_reward_shaping,
         terminate_on_success=args.terminate_on_success,
+        success_fraction=float(args.success_fraction),
     )
 
     if args.play:
