@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
-# train_panda_door_sac.py
-# Franka Panda opens a door in robosuite (Door Opening Task) using SAC (Stable-Baselines3 + Gymnasium)
+# train_panda_door_close_sac.py
+# Franka Panda closes a door in robosuite (Door Task) using SAC (Stable-Baselines3 + Gymnasium)
 
-"""
-SAC ottimizza una distribuzione di azioni con entropia: ent_coef = "auto"
-Questo significa:
-    - Anche a reward quasi nullo continua a esplorare!
-    - Se non viene detto esplicitamente “Ora fermati” lui non lo farà mai.
-"""
-
-# TODO CHIUSURA PORTA
-# TODO CURRICULUM
-# TODO UNICA SEQUENZA
+# TODO LA PORTA SI CHIUDA MA LA CHIUSURA E' TROPPO AGGRESSIVA E NON EFFICACE NEL COME AVVIENE
+# TODO UNA VOLTA CHIUSA LA PORTA NON DEVE PIU' FARE MOVIMENTI INUTILI, AL MASSIMO RITORNARE INDIETRO
 
 from __future__ import annotations
 
@@ -30,18 +22,20 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CheckpointCallback, CallbackList
 
+
 def _has_tensorboard() -> bool:
     try:
-        import tensorboard
+        import tensorboard  # noqa: F401
         return True
     except Exception as e:
         print(e)
         return False
 
+
 @dataclass
 class TrainConfig:
-    seed   : int = 42  # 123
-    run_dir: str = "runs/door_sac"
+    seed   : int = 42
+    run_dir: str = "runs/door_close_sac"
     tb_dir : str = "runs/tb"
 
     env_name    : str = "Door"
@@ -53,11 +47,12 @@ class TrainConfig:
     reward_scale        : float = 1.0
     use_object_obs      : bool  = True
     use_camera_obs      : bool  = False
-    terminate_on_success: bool  = False
+    terminate_on_success: bool  = True  # Quando la porta è chiusa --> episodio finito.
 
     num_envs    : int  = 8
     vecnormalize: bool = True
 
+    # SAC hyperparams
     total_steps    : int   = 3_000_000
     learning_rate  : float = 3e-4
     buffer_size    : int   = 1_000_000
@@ -66,7 +61,7 @@ class TrainConfig:
     tau            : float = 0.005
     train_freq     : int   = 1
     gradient_steps : int   = 1
-    learning_starts: int   = 10_000
+    learning_starts: int   = 20_000
     ent_coef       : str   = "auto"
     policy_net_arch: Tuple[int, int] = (256, 256)
 
@@ -74,17 +69,21 @@ class TrainConfig:
     n_eval_episodes: int = 10
     checkpoint_freq: int = 200_000
 
-    success_fraction: float = 0.92
+    close_fraction: float = 0.08
+
+    init_open_min_fraction: float = 0.70
+    init_open_max_fraction: float = 1.00
 
     w_progress   : float = 2.0
-    w_delta      : float = 8.0
-    w_action     : float = 0.02
+    w_delta      : float = 4.0
+    w_action     : float = 0.05
     time_penalty : float = 0.002
     success_bonus: float = 5.0
 
     debug_print_every: int = 200
 
-class RoboSuiteDoorGymnasiumEnv(gym.Env):
+
+class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 20}
 
     def __init__(self, cfg: TrainConfig, render_mode: Optional[str] = None):
@@ -97,12 +96,13 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
 
         controller_config = load_composite_controller_config(controller="BASIC")
 
-        self._rs_env = suite.make(env_name=cfg.env_name, robots=cfg.robot, controller_configs=controller_config,
-            has_renderer=(render_mode == "human"), has_offscreen_renderer=False, use_camera_obs=cfg.use_camera_obs, use_object_obs=cfg.use_object_obs,
-            reward_shaping=cfg.reward_shaping, reward_scale=cfg.reward_scale, horizon=cfg.horizon, control_freq=cfg.control_freq)
+        self._rs_env = suite.make(env_name=cfg.env_name, robots=cfg.robot, controller_configs=controller_config, has_renderer=(render_mode == "human"),
+            has_offscreen_renderer=False, use_camera_obs=cfg.use_camera_obs, use_object_obs=cfg.use_object_obs, reward_shaping=cfg.reward_shaping,
+            reward_scale=cfg.reward_scale, horizon=cfg.horizon, control_freq=cfg.control_freq)
 
-        self._door_hinge_name     = "Door_hinge"
-        self._door_hinge_qpos_adr = None
+        self._door_hinge_name = "Door_hinge"
+
+        self._door_hinge_qpos_adr: Optional[int] = None
         for name, adr in zip(self._rs_env.sim.model.joint_names, self._rs_env.sim.model.jnt_qposadr):
             if name == self._door_hinge_name:
                 self._door_hinge_qpos_adr = int(adr)
@@ -110,15 +110,23 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         if self._door_hinge_qpos_adr is None:
             raise RuntimeError("Door_hinge joint not found! Check robosuite model joint names.")
 
-        # Read joint limits
-        jid            = self._rs_env.sim.model.joint_name2id(self._door_hinge_name)
-        jmin, jmax     = self._rs_env.sim.model.jnt_range[jid]
+        self._door_hinge_dof_adr: Optional[int] = None
+        try:
+            jid = self._rs_env.sim.model.joint_name2id(self._door_hinge_name)
+            self._door_hinge_dof_adr = int(self._rs_env.sim.model.jnt_dofadr[jid])
+        except Exception as e:
+            print(str(e))
+            self._door_hinge_dof_adr = None
+
+        jid        = self._rs_env.sim.model.joint_name2id(self._door_hinge_name)
+        jmin, jmax = self._rs_env.sim.model.jnt_range[jid]
         self._door_min = float(jmin)
         self._door_max = float(jmax)
         if not np.isfinite(self._door_min) or not np.isfinite(self._door_max) or self._door_max <= self._door_min:
             raise RuntimeError(f"Invalid door hinge limits: [{self._door_min}, {self._door_max}]")
 
-        self._success_angle   = self._door_min + float(cfg.success_fraction) * (self._door_max - self._door_min)
+        rng                   = (self._door_max - self._door_min)
+        self._success_angle   = self._door_min + float(cfg.close_fraction) * rng
         self._success_latched = False
 
         low, high         = self._rs_env.action_spec
@@ -129,8 +137,8 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         flat           = self._flatten_obs(obs)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=flat.shape, dtype=np.float32)
 
-        self._step_count      = 0
-        self._prev_door_angle = None
+        self._step_count = 0
+        self._prev_door_angle: Optional[float] = None
 
     @staticmethod
     def _select_obs_keys(obs: Dict[str, Any]) -> List[str]:
@@ -151,8 +159,26 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         return np.concatenate(parts, axis=0)
 
     def _get_door_angle(self) -> float:
+        assert self._door_hinge_qpos_adr is not None
         a = float(self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr])
         return float(np.clip(a, self._door_min, self._door_max))
+
+    def _force_door_angle(self, angle: float) -> None:
+        assert self._door_hinge_qpos_adr is not None
+        a = float(np.clip(angle, self._door_min, self._door_max))
+        self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr] = a
+        if self._door_hinge_dof_adr is not None:
+            try:
+                self._rs_env.sim.data.qvel[self._door_hinge_dof_adr] = 0.0
+            except Exception as e:
+                print(str(e))
+                pass
+        try:
+            self._rs_env.sim.forward()
+        except Exception as e:
+            print("[ERROR] Some mujoco wrappers might not expose forward; tolerate")
+            print(str(e))
+            pass
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
@@ -162,6 +188,15 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         obs                   = self._rs_env.reset()
         self._step_count      = 0
         self._success_latched = False
+
+        rng = (self._door_max - self._door_min)
+        lo  = self._door_min + float(self.cfg.init_open_min_fraction) * rng
+        hi  = self._door_min + float(self.cfg.init_open_max_fraction) * rng
+        if hi < lo:
+            lo, hi = hi, lo
+        init_angle = float(np.random.uniform(lo, hi))
+        self._force_door_angle(init_angle)
+
         self._prev_door_angle = self._get_door_angle()
 
         info = {
@@ -169,6 +204,7 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
             "door_min"     : self._door_min,
             "door_max"     : self._door_max,
             "success_angle": self._success_angle,
+            "init_angle"   : init_angle,
         }
         return self._flatten_obs(obs), info
 
@@ -181,26 +217,35 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
 
         door_angle = self._get_door_angle()
         prev_angle = float(self._prev_door_angle) if self._prev_door_angle is not None else door_angle
-        delta      = door_angle - prev_angle
 
+        delta_close = prev_angle - door_angle
         self._prev_door_angle = door_angle
 
-        denom    = (self._door_max - self._door_min)
-        progress = (door_angle - self._door_min) / denom
-        progress = float(np.clip(progress, 0.0, 1.0))
+        if door_angle <= self._success_angle * 1.2:
+            delta_close = 0.0
 
-        is_success = bool(door_angle >= self._success_angle)
+        denom = (self._door_max - self._door_min)
+
+        # progress_close: 0 when fully open, 1 when fully closed
+        progress_close = 1.0 - (door_angle - self._door_min) / denom
+        progress_close = float(np.clip(progress_close, 0.0, 1.0))
+
+        just_succeeded = False
+        if door_angle <= self._success_angle and not self._success_latched:
+            self._success_latched = True
+            just_succeeded         = True
+        # is_success = bool(door_angle <= self._success_angle)
+        is_success = self._success_latched
 
         r = 0.0
-        r += self.cfg.w_progress * progress
-        r += self.cfg.w_delta * float(delta)
+        r += self.cfg.w_progress * progress_close
+        r += self.cfg.w_delta * float(delta_close)
 
         r -= self.cfg.w_action * float(np.linalg.norm(action))
         r -= self.cfg.time_penalty
 
-        if is_success and not self._success_latched:
+        if just_succeeded:
             r += self.cfg.success_bonus
-            self._success_latched = True
 
         reward = float(np.clip(r, -10.0, 10.0))
 
@@ -212,16 +257,17 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
 
         if self.cfg.debug_print_every > 0 and (self._step_count % self.cfg.debug_print_every == 0):
             print(
-                f"[DOOR] angle={door_angle:.4f} rad "
+                f"[CLOSE] angle={door_angle:.4f} rad "
                 f"(min={self._door_min:.4f}, max={self._door_max:.4f}, succ={self._success_angle:.4f}) "
-                f"progress={progress:.2f} delta={delta:+.4f} success={int(is_success)}"
+                f"progress={progress_close:.2f} delta={delta_close:+.4f} success={int(is_success)}"
             )
 
-        info                  = dict(info or {})
-        info["is_success"]    = is_success
-        info["door_angle"]    = door_angle
-        info["door_progress"] = progress
-        info["step_count"]    = self._step_count
+        info = dict(info or {})
+        info["is_success"]      = is_success
+        info["door_angle"]      = door_angle
+        info["door_progress"]   = progress_close
+        info["step_count"]      = self._step_count
+        info["task"]            = "close"
         return self._flatten_obs(obs), reward, terminated, truncated, info
 
     def render(self):
@@ -280,7 +326,7 @@ class SuccessRateCallback(BaseCallback):
 
 def make_env_fn(cfg: TrainConfig, render_mode: Optional[str] = None):
     def _init():
-        env = RoboSuiteDoorGymnasiumEnv(cfg, render_mode=render_mode)
+        env = RoboSuiteDoorCloseGymnasiumEnv(cfg, render_mode=render_mode)
         env = Monitor(env)
         return env
     return _init
@@ -342,7 +388,7 @@ def train(cfg: TrainConfig):
         CheckpointCallback(
             save_freq=max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
             save_path=os.path.join(cfg.run_dir, "checkpoints"),
-            name_prefix="door_sac",
+            name_prefix="door_close_sac",
             save_replay_buffer=True,
             save_vecnormalize=True,
         ),
@@ -366,8 +412,9 @@ def train(cfg: TrainConfig):
     vec.close()
     eval_env.close()
 
+
 def play(model_path: str, cfg: TrainConfig):
-    env  = RoboSuiteDoorGymnasiumEnv(cfg, render_mode="human")
+    env  = RoboSuiteDoorCloseGymnasiumEnv(cfg, render_mode="human")
     env  = Monitor(env)
     venv = DummyVecEnv([lambda: env])
 
@@ -388,7 +435,6 @@ def play(model_path: str, cfg: TrainConfig):
         action, _ = model.predict(obs, deterministic=True)
         action    = action.astype(np.float32, copy=True)
 
-        # Smoothing
         action      = alpha * action + (1.0 - alpha) * prev_action
         prev_action = action.copy()
 
@@ -399,12 +445,13 @@ def play(model_path: str, cfg: TrainConfig):
             obs = venv.reset()
             prev_action[:] = 0.0
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--total-steps", type=int, default=3_000_000)
     p.add_argument("--num-envs",    type=int, default=8)
-    p.add_argument("--seed",        type=int, default=123)
-    p.add_argument("--run-dir",     type=str, default="runs/door_sac")
+    p.add_argument("--seed",        type=int, default=42)
+    p.add_argument("--run-dir",     type=str, default="runs/door_close_sac")
     p.add_argument("--tb-dir",      type=str, default="runs/tb")
 
     p.add_argument("--play",  action="store_true",  help="Run a trained model with on-screen rendering")
@@ -415,27 +462,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-reward-shaping",    action="store_true")
     p.add_argument("--terminate-on-success", action="store_true")
 
-    p.add_argument("--success-fraction", type=float, default=0.92, help="Success threshold as fraction of hinge range")
+    p.add_argument("--close-fraction",         type=float, default=0.08, help="Success threshold as fraction of hinge range above the minimum (smaller = stricter close)")
+    p.add_argument("--init-open-min-fraction", type=float, default=0.70, help="Reset: minimum initial door angle as fraction of hinge range above minimum")
+    p.add_argument("--init-open-max-fraction", type=float, default=1.00, help="Reset: maximum initial door angle as fraction of hinge range above minimum")
     return p.parse_args()
 
 def main():
     args = parse_args()
-    cfg  = TrainConfig(
-        total_steps=args.total_steps,
-        num_envs=args.num_envs,
-        seed=args.seed,
-        run_dir=args.run_dir,
-        tb_dir=args.tb_dir,
-        horizon=args.horizon,
-        control_freq=args.control_freq,
-        reward_shaping=not args.no_reward_shaping,
-        terminate_on_success=args.terminate_on_success,
-        success_fraction=float(args.success_fraction),
-    )
+    cfg  = TrainConfig(total_steps=int(args.total_steps), num_envs=int(args.num_envs), seed=int(args.seed), run_dir=str(args.run_dir), tb_dir=str(args.tb_dir),
+        horizon=int(args.horizon), control_freq=int(args.control_freq), reward_shaping=not args.no_reward_shaping, terminate_on_success=bool(args.terminate_on_success),
+        close_fraction=float(args.close_fraction), init_open_min_fraction=float(args.init_open_min_fraction), init_open_max_fraction=float(args.init_open_max_fraction))
+
+    if cfg.init_open_min_fraction < 0.0 or cfg.init_open_max_fraction > 1.0:
+        raise SystemExit("init-open fractions must be in [0,1].")
+    if cfg.close_fraction < 0.0 or cfg.close_fraction > 1.0:
+        raise SystemExit("close-fraction must be in [0,1].")
 
     if args.play:
         if not args.model:
-            raise SystemExit("Missing --model path. Example: --play --model runs/door_sac/best_model.zip")
+            raise SystemExit("Missing --model path. Example: --play --model runs/door_close_sac/best_model.zip")
         play(args.model, cfg)
     else:
         train(cfg)
