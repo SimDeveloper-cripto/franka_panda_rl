@@ -13,10 +13,10 @@ LOG_DIR          = runs/tb
 
 help:
 	@echo "[INFO: python 3.10 necessario] Comandi:"
-	@echo "  make train   - Avvia l'addestramento del modello"
-	@echo "  make play    - Avvia la valutazione (test) del modello salvato"
-	@echo "  make board   - Avvia TensorBoard per monitorare i log"
-	@echo "  make clean   - Rimuove i file temporanei di Python"
+	@echo "  make train_<task> - Avvia l'addestramento del modello"
+	@echo "  make play_<task>  - Avvia la valutazione (test) del modello salvato"
+	@echo "  make board        - Avvia TensorBoard per monitorare i log"
+	@echo "  make clean        - Rimuove i file temporanei di Python"
 
 train_open:
 	$(PYTHON) $(SCRIPT) --total-steps $(STEPS) --num-envs $(ENVS)
