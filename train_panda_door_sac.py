@@ -7,15 +7,16 @@ SAC ottimizza una distribuzione di azioni con entropia: ent_coef = "auto"
 Questo significa:
     - Anche a reward quasi nullo continua a esplorare!
     - Se non viene detto esplicitamente “Ora fermati” lui non lo farà mai.
+La policy, una volta “soddisfatto” l’obiettivo principale, spesso converge su una zona di quasi-equilibrio (o una postura “inerte”) perché è sufficientemente stabile rispetto a reward/penalità.
 """
 
-# TODO CHIUSURA PORTA
 # TODO CURRICULUM
 # TODO UNICA SEQUENZA
 
 from __future__ import annotations
 
 import os
+import time
 import json
 import argparse
 import numpy as np
@@ -84,6 +85,13 @@ class TrainConfig:
 
     debug_print_every: int = 200
 
+    # Post success: return to start
+    enable_return_stage: bool = True
+    w_return_pos       : float = 2.0
+    w_door_regress     : float = 4.0
+    return_pos_tol     : float = 0.05   # metri (tolleranza eef)
+    return_hold_steps  : int   = 10
+
 class RoboSuiteDoorGymnasiumEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 20}
 
@@ -132,6 +140,11 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         self._step_count      = 0
         self._prev_door_angle = None
 
+        # Return stage
+        self._start_eef_pos      = None
+        self._start_gripper_qpos = None
+        self._return_hold        = 0
+
     @staticmethod
     def _select_obs_keys(obs: Dict[str, Any]) -> List[str]:
         keys: List[str] = []
@@ -160,6 +173,19 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
             np.random.seed(seed)
 
         obs                   = self._rs_env.reset()
+
+        # Save "start" references for return-stage shaping
+        self._start_eef_pos      = None
+        self._start_gripper_qpos = None
+
+        if isinstance(obs, dict):
+            if "robot0_eef_pos" in obs:
+                self._start_eef_pos = obs["robot0_eef_pos"].astype(np.float32).copy()
+            if "robot0_gripper_qpos" in obs:
+                self._start_gripper_qpos = obs["robot0_gripper_qpos"].astype(np.float32).copy()
+
+        self._return_hold = 0
+
         self._step_count      = 0
         self._success_latched = False
         self._prev_door_angle = self._get_door_angle()
@@ -202,10 +228,46 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
             r += self.cfg.success_bonus
             self._success_latched = True
 
+        # ----------------------------
+        # Post-success shaping: keep door open + return to start
+        # ----------------------------
+        returned = False
+        if self.cfg.enable_return_stage and self._success_latched:
+            # 1) discourage door "regression"     (closing back after success)
+            # closing regression = negative delta (door_angle decreased)
+            regress = max(0.0, -float(delta))
+            r -= self.cfg.w_door_regress * regress
+
+            # 2) reward returning end-effector near start pose (if available)
+            if isinstance(obs, dict) and (self._start_eef_pos is not None) and ("robot0_eef_pos" in obs):
+                cur = obs["robot0_eef_pos"].astype(np.float32)
+                dist = float(np.linalg.norm(cur - self._start_eef_pos))
+
+                # smooth positive reward, saturates when close
+                r += self.cfg.w_return_pos * float(1.0 - np.tanh(dist / max(1e-6, self.cfg.return_pos_tol)))
+
+                returned = dist < self.cfg.return_pos_tol
+
+            # Optional: also encourage gripper to go back near initial configuration (direction-agnostic)
+            if isinstance(obs, dict) and (self._start_gripper_qpos is not None) and ("robot0_gripper_qpos" in obs):
+                gcur = obs["robot0_gripper_qpos"].astype(np.float32)
+                gdist = float(np.linalg.norm(gcur - self._start_gripper_qpos))
+                r -= 0.1 * gdist  # small penalty so it learns to "release"
+
+            # Termination when returned for N consecutive steps
+            if returned:
+                self._return_hold += 1
+            else:
+                self._return_hold = 0
+
         reward = float(np.clip(r, -10.0, 10.0))
 
         terminated = bool(is_success and self.cfg.terminate_on_success)
         truncated  = bool(self._step_count >= self.cfg.horizon)
+
+        if self.cfg.enable_return_stage and self._success_latched:
+            if self._return_hold >= self.cfg.return_hold_steps:
+                terminated = True
 
         if bool(rs_done) and not terminated:
             truncated = True
@@ -384,6 +446,8 @@ def play(model_path: str, cfg: TrainConfig):
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
     alpha       = 0.2
 
+    target_dt = 1.0 / float(cfg.control_freq)
+    next_t    = time.perf_counter()
     while True:
         action, _ = model.predict(obs, deterministic=True)
         action    = action.astype(np.float32, copy=True)
@@ -394,6 +458,13 @@ def play(model_path: str, cfg: TrainConfig):
 
         obs, reward, dones, infos = venv.step(action)
         venv.render()
+
+        next_t    += target_dt
+        sleep_for = next_t - time.perf_counter()
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        else:
+            next_t = time.perf_counter()
 
         if np.any(dones):
             obs = venv.reset()

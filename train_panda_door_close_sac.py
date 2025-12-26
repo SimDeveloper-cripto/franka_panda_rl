@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# TODO SI PUO' FARE ANCORA DI MEGLIO
+
 import os
+import time
 import json
 import argparse
 import numpy as np
@@ -40,7 +43,7 @@ class TrainConfig:
     reward_scale        : float = 1.0
     use_object_obs      : bool  = True
     use_camera_obs      : bool  = False
-    terminate_on_success: bool  = True
+    terminate_on_success: bool  = False  # Per imparare "chiudi + torna" deve proseguire dopo la chiusura
 
     num_envs    : int  = 8
     vecnormalize: bool = True
@@ -73,6 +76,13 @@ class TrainConfig:
     success_bonus: float = 5.0
 
     debug_print_every: int = 200
+
+    # Post-success: return to start
+    enable_return_stage: bool  = True
+    w_return_pos       : float = 2.0
+    w_door_regress     : float = 4.0
+    return_pos_tol     : float = 0.05
+    return_hold_steps  : int   = 10
 
 
 class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
@@ -133,6 +143,10 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         self._post_success_steps   = 0
         self._post_success_horizon = 15
 
+        self._start_eef_pos      = None
+        self._start_gripper_qpos = None
+        self._return_hold        = 0
+
     def _flatten_obs(self, obs: Dict[str, Any]) -> np.ndarray:
         return np.concatenate([obs[k].astype(np.float32).ravel() for k in self._obs_keys])
 
@@ -142,6 +156,15 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         obs = self._rs_env.reset()
+
+        self._start_eef_pos      = None
+        self._start_gripper_qpos = None
+        if isinstance(obs, dict):
+            if "robot0_eef_pos" in obs:
+                self._start_eef_pos = obs["robot0_eef_pos"].astype(np.float32).copy()
+            if "robot0_gripper_qpos" in obs:
+                self._start_gripper_qpos = obs["robot0_gripper_qpos"].astype(np.float32).copy()
+        self._return_hold = 0
 
         rng = self._door_max - self._door_min
         lo = self._door_min + self.cfg.init_open_min_fraction * rng
@@ -195,9 +218,38 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         if just_succeeded:
             reward += self.cfg.success_bonus
 
+        returned = False
+        if self.cfg.enable_return_stage and self._success_latched:
+            # 1) discourage re-opening after success
+            delta_open = float(door_angle - prev_angle)
+            regress    = max(0.0, delta_open)
+            reward     -= self.cfg.w_door_regress * regress
+
+            # 2) reward returning end-effector near start
+            if isinstance(obs, dict) and (self._start_eef_pos is not None) and ("robot0_eef_pos" in obs):
+                cur      = obs["robot0_eef_pos"].astype(np.float32)
+                dist     = float(np.linalg.norm(cur - self._start_eef_pos))
+                reward   += self.cfg.w_return_pos * float(1.0 - np.tanh(dist / max(1e-6, self.cfg.return_pos_tol)))
+                returned = dist < self.cfg.return_pos_tol
+
+            # 3) mild penalty to bring gripper back near initial configuration
+            if isinstance(obs, dict) and (self._start_gripper_qpos is not None) and ("robot0_gripper_qpos" in obs):
+                gcur    = obs["robot0_gripper_qpos"].astype(np.float32)
+                gdist   = float(np.linalg.norm(gcur - self._start_gripper_qpos))
+                reward -= 0.1 * gdist
+
+            if returned:
+                self._return_hold += 1
+            else:
+                self._return_hold = 0
+
         reward     = float(np.clip(reward, -10.0, 10.0))
         terminated = bool(is_success and self.cfg.terminate_on_success)
         truncated  = bool(self._step_count >= self.cfg.horizon)
+
+        if self.cfg.enable_return_stage and self._success_latched:
+            if self._return_hold >= self.cfg.return_hold_steps:
+                terminated = True
 
         if bool(rs_done) and not terminated:
             truncated = True
@@ -309,6 +361,8 @@ def play(model_path: str, cfg: TrainConfig):
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
     alpha = 0.2
 
+    target_dt = 1.0 / float(cfg.control_freq)
+    next_t    = time.perf_counter()
     while True:
         action, _ = model.predict(obs, deterministic=True)
         action    = action.astype(np.float32, copy=True)
@@ -321,6 +375,13 @@ def play(model_path: str, cfg: TrainConfig):
             venv.venv.render()
         else:
             venv.render()
+
+        next_t    += target_dt
+        sleep_for = next_t - time.perf_counter()
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        else:
+            next_t = time.perf_counter()
 
         if np.any(dones):
             obs = venv.reset()
@@ -353,7 +414,7 @@ def main():
 
     cfg = TrainConfig(seed=args.seed, run_dir=args.run_dir, tb_dir=args.tb_dir,
         total_steps=args.total_steps, num_envs=args.num_envs, horizon=args.horizon, control_freq=args.control_freq,
-        reward_shaping=not args.no_reward_shaping, terminate_on_success=args.no_terminate_on_success,
+        reward_shaping=not args.no_reward_shaping, terminate_on_success=not args.no_terminate_on_success,
         close_fraction=args.close_fraction,
         init_open_min_fraction=args.init_open_min_fraction, init_open_max_fraction=args.init_open_max_fraction)
 

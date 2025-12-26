@@ -2,8 +2,8 @@ PYTHON       = python
 SCRIPT       = train_panda_door_sac.py
 SCRIPT_CLOSE = train_panda_door_close_sac.py
 STEPS        = 2000000
-STEPS_CLOSE  = 420000
-ENVS         = 2
+STEPS_CLOSE  = 450000
+ENVS         = 4
 
 MODEL_PATH       = runs/door_sac/best_model.zip
 MODEL_PATH_CLOSE = runs/door_close_sac/best_model.zip
