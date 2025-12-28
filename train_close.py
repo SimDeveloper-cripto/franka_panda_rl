@@ -90,6 +90,9 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         self._start_gripper_qpos = None
         self._return_hold        = 0
 
+        self._retreat_pos = None
+        self._prev_action = np.zeros(self.action_space.shape, dtype=np.float32)
+
     def _flatten_obs(self, obs: Dict[str, Any]) -> np.ndarray:
         return np.concatenate([obs[k].astype(np.float32).ravel() for k in self._obs_keys])
 
@@ -109,6 +112,10 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
                 self._start_gripper_qpos = obs["robot0_gripper_qpos"].astype(np.float32).copy()
         self._return_hold = 0
 
+        if self._start_eef_pos is not None:
+            self._retreat_pos = self._start_eef_pos + np.array([0.0, -0.15, 0.10], dtype=np.float32)
+        self._prev_action[:] = 0.0
+
         rng = self._door_max - self._door_min
         lo = self._door_min + self.cfg.init_open_min_fraction * rng
         hi = self._door_min + self.cfg.init_open_max_fraction * rng
@@ -125,23 +132,30 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         return self._flatten_obs(obs), {}
 
     def step(self, action: np.ndarray):
-        action = np.asarray(action, dtype=np.float32)
-        action = np.clip(action, -1.0, 1.0)
+        action       = np.asarray(action, dtype=np.float32)
+        action       = np.clip(action, -1.0, 1.0)
+
+        # Could be commented (micro-jitter removal attempt)
+        action[np.abs(action) < 0.05] = 0.0
+
+        if self._success_latched:
+            action *= 0.2
+
+        if self.cfg.enable_return_stage and self._success_latched and self._return_hold >= self.cfg.return_hold_steps:
+            action = np.zeros_like(action)
 
         obs, _, rs_done, info = self._rs_env.step(action)
         self._step_count += 1
 
         door_angle            = self._get_door_angle()
         prev_angle            = float(self._prev_door_angle) if self._prev_door_angle is not None else door_angle
-        delta_close           = prev_angle - door_angle
         self._prev_door_angle = door_angle
 
+        delta_close = max(0.0, prev_angle -door_angle)
         if door_angle <= self._success_angle:
             delta_close = 0.0
 
-        denom = (self._door_max - self._door_min)
-
-        # progress: 0 open → 1 closed
+        denom    = (self._door_max - self._door_min)
         progress = 1.0 - (door_angle - self._door_min) / denom
         progress = float(np.clip(progress, 0.0, 1.0))
 
@@ -149,53 +163,52 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         if door_angle <= self._success_angle and not self._success_latched:
             self._success_latched = True
             just_succeeded        = True
-
         is_success = self._success_latched
 
         reward = 0.0
         reward += self.cfg.w_progress * progress
         reward += self.cfg.w_delta    * delta_close
-        reward -= self.cfg.w_action   * float(np.linalg.norm(action))
         reward -= self.cfg.time_penalty
 
         if just_succeeded:
             reward += self.cfg.success_bonus
 
+        if not self._success_latched:
+            reward -= self.cfg.w_action * float(np.linalg.norm(action))
+
         returned = False
         if self.cfg.enable_return_stage and self._success_latched:
-            # 1) discourage re-opening after success
-            delta_open = float(door_angle - prev_angle)
-            regress    = max(0.0, delta_open)
-            reward     -= self.cfg.w_door_regress * regress
+            # 1) discourage re-opening
+            delta_open = max(0.0, door_angle - prev_angle)
+            reward     -= self.cfg.w_door_regress * delta_open
 
-            # 2) reward returning end-effector near start
-            if isinstance(obs, dict) and (self._start_eef_pos is not None) and ("robot0_eef_pos" in obs):
-                cur      = obs["robot0_eef_pos"].astype(np.float32)
-                dist     = float(np.linalg.norm(cur - self._start_eef_pos))
-                reward   += self.cfg.w_return_pos * float(1.0 - np.tanh(dist / max(1e-6, self.cfg.return_pos_tol)))
-                returned = dist < self.cfg.return_pos_tol
+            # 2) retreat reward
+            if isinstance(obs, dict) and self._retreat_pos is not None:
+                cur          = obs["robot0_eef_pos"].astype(np.float32)
+                dist_retreat = float(np.linalg.norm(cur - self._retreat_pos))
+                reward       += self.cfg.w_return_pos * (1.0 - np.tanh(dist_retreat / 0.10))
+                returned     = dist_retreat < self.cfg.return_pos_tol
 
-            # 3) mild penalty to bring gripper back near initial configuration
-            if isinstance(obs, dict) and (self._start_gripper_qpos is not None) and ("robot0_gripper_qpos" in obs):
-                gcur    = obs["robot0_gripper_qpos"].astype(np.float32)
-                gdist   = float(np.linalg.norm(gcur - self._start_gripper_qpos))
-                reward -= 0.1 * gdist
-
+            # Hold Logic (no extra action penalty is applied)
             if returned:
                 self._return_hold += 1
             else:
                 self._return_hold = 0
 
         reward     = float(np.clip(reward, -10.0, 10.0))
-        terminated = bool(is_success and self.cfg.terminate_on_success)
-        truncated  = bool(self._step_count >= self.cfg.horizon)
 
+        terminated = False
         if self.cfg.enable_return_stage and self._success_latched:
             if self._return_hold >= self.cfg.return_hold_steps:
                 terminated = True
 
+        # terminated = bool(is_success and self.cfg.terminate_on_success)
+        truncated  = bool(self._step_count >= self.cfg.horizon)
+
         if bool(rs_done) and not terminated:
             truncated = True
+
+        self._prev_action = action.copy()
 
         info = dict(info or {})
         info["is_success"] = is_success
@@ -302,7 +315,7 @@ def play(model_path: str, cfg: TrainConfig):
     obs = venv.reset()
 
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
-    alpha = 0.2
+    alpha = 0.1
 
     target_dt = 1.0 / float(cfg.control_freq)
     next_t    = time.perf_counter()

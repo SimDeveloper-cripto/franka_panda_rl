@@ -12,7 +12,7 @@ class TrainConfig:
     env_name    : str = "Door"
     robot       : str = "Panda"
     horizon     : int = 500
-    control_freq: int = 20
+    control_freq: int = 30  # 20
 
     reward_shaping      : bool  = True
     reward_scale        : float = 1.0
