@@ -1,6 +1,6 @@
 PYTHON       = python
-SCRIPT       = train_panda_door_sac.py
-SCRIPT_CLOSE = train_panda_door_close_sac.py
+SCRIPT       = train_open.py
+SCRIPT_CLOSE = train_close.py
 STEPS        = 2000000
 STEPS_CLOSE  = 450000
 ENVS         = 4

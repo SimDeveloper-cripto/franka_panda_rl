@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# train_panda_door_sac.py
+# train_open.py
 # Franka Panda opens a door in robosuite (Door Opening Task) using SAC (Stable-Baselines3 + Gymnasium)
 
 """
@@ -8,10 +8,12 @@ Questo significa:
     - Anche a reward quasi nullo continua a esplorare!
     - Se non viene detto esplicitamente “Ora fermati” lui non lo farà mai.
 La policy, una volta “soddisfatto” l’obiettivo principale, spesso converge su una zona di quasi-equilibrio (o una postura “inerte”) perché è sufficientemente stabile rispetto a reward/penalità.
-"""
 
-# TODO CURRICULUM
-# TODO UNICA SEQUENZA
+Anche con policy deterministica, piccoli jitter possono emergere per:
+    (i)   rumore numerico/normalizzazione
+    (ii)  reward non “ancorata” a uno stato di stop
+    (iii) dinamiche del controller BASIC che reagiscono a micro-variazioni
+"""
 
 from __future__ import annotations
 
@@ -20,11 +22,12 @@ import time
 import json
 import argparse
 import numpy as np
-from dataclasses import dataclass, asdict
-from typing import Dict, Any, Tuple, Optional, List
+from dataclasses import asdict
+from typing import Dict, Any, Optional, List
 
 import gymnasium as gym
 from gymnasium import spaces
+from config.train_open_config import TrainConfig
 
 from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
@@ -39,66 +42,14 @@ def _has_tensorboard() -> bool:
         print(e)
         return False
 
-@dataclass
-class TrainConfig:
-    seed   : int = 42  # 123
-    run_dir: str = "runs/door_sac"
-    tb_dir : str = "runs/tb"
-
-    env_name    : str = "Door"
-    robot       : str = "Panda"
-    horizon     : int = 500
-    control_freq: int = 20
-
-    reward_shaping      : bool  = True
-    reward_scale        : float = 1.0
-    use_object_obs      : bool  = True
-    use_camera_obs      : bool  = False
-    terminate_on_success: bool  = False
-
-    num_envs    : int  = 8
-    vecnormalize: bool = True
-
-    total_steps    : int   = 3_000_000
-    learning_rate  : float = 3e-4
-    buffer_size    : int   = 1_000_000
-    batch_size     : int   = 256
-    gamma          : float = 0.99
-    tau            : float = 0.005
-    train_freq     : int   = 1
-    gradient_steps : int   = 1
-    learning_starts: int   = 10_000
-    ent_coef       : str   = "auto"
-    policy_net_arch: Tuple[int, int] = (256, 256)
-
-    eval_freq      : int = 50_000
-    n_eval_episodes: int = 10
-    checkpoint_freq: int = 200_000
-
-    success_fraction: float = 0.92
-
-    w_progress   : float = 2.0
-    w_delta      : float = 8.0
-    w_action     : float = 0.02
-    time_penalty : float = 0.002
-    success_bonus: float = 5.0
-
-    debug_print_every: int = 200
-
-    # Post success: return to start
-    enable_return_stage: bool = True
-    w_return_pos       : float = 2.0
-    w_door_regress     : float = 4.0
-    return_pos_tol     : float = 0.05   # metri (tolleranza eef)
-    return_hold_steps  : int   = 10
-
 class RoboSuiteDoorGymnasiumEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 20}
 
     def __init__(self, cfg: TrainConfig, render_mode: Optional[str] = None):
         super().__init__()
-        self.cfg         = cfg
-        self.render_mode = render_mode
+        self._prev_action = None
+        self.cfg          = cfg
+        self.render_mode  = render_mode
 
         import robosuite as suite
         from robosuite.controllers import load_composite_controller_config
@@ -196,11 +147,26 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
             "door_max"     : self._door_max,
             "success_angle": self._success_angle,
         }
+
+        self._prev_action = None
+        self._freeze_next = False
         return self._flatten_obs(obs), info
 
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, -1.0, 1.0)
+
+        if self._prev_action is None:
+            self._prev_action = np.zeros_like(action, dtype=np.float32)
+        a                 = float(self.cfg.action_smooth_alpha)
+        action            = a * action + (1.0 - a) * self._prev_action
+        self._prev_action = action.copy()
+
+        db                          = float(self.cfg.action_deadband)
+        action[np.abs(action) < db] = 0.0
+
+        if getattr(self, "_freeze_next", False):
+            action[:] = 0.0
 
         obs, _rs_reward, rs_done, info = self._rs_env.step(action)
         self._step_count += 1
@@ -221,7 +187,8 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         r += self.cfg.w_progress * progress
         r += self.cfg.w_delta * float(delta)
 
-        r -= self.cfg.w_action * float(np.linalg.norm(action))
+        w_act = self.cfg.w_action_post_success if self._success_latched else self.cfg.w_action
+        r -= w_act * float(np.linalg.norm(action))
         r -= self.cfg.time_penalty
 
         if is_success and not self._success_latched:
@@ -250,7 +217,7 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
 
             # Optional: also encourage gripper to go back near initial configuration (direction-agnostic)
             if isinstance(obs, dict) and (self._start_gripper_qpos is not None) and ("robot0_gripper_qpos" in obs):
-                gcur = obs["robot0_gripper_qpos"].astype(np.float32)
+                gcur  = obs["robot0_gripper_qpos"].astype(np.float32)
                 gdist = float(np.linalg.norm(gcur - self._start_gripper_qpos))
                 r -= 0.1 * gdist  # small penalty so it learns to "release"
 
@@ -259,6 +226,8 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
                 self._return_hold += 1
             else:
                 self._return_hold = 0
+
+        self._freeze_next = self.cfg.freeze_on_return and (self._return_hold >= self.cfg.freeze_min_hold)
 
         reward = float(np.clip(r, -10.0, 10.0))
 
