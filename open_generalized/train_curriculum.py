@@ -104,7 +104,7 @@ def build_teacher(seed: int) -> StageTeacher:
 def train(cfg: TrainConfig):
     ensure_dir(cfg.run_dir)
     ensure_dir(cfg.tb_dir)
-    save_config(cfg, os.path.join(cfg.run_dir, "config_curriculum.json"))
+    save_config(cfg, os.path.join(cfg.run_dir, "open_config_curriculum.json"))
 
     eval_episodes = 20
     teacher       = build_teacher(seed=cfg.seed)
@@ -120,7 +120,7 @@ def train(cfg: TrainConfig):
     if cfg.vecnormalize:
         eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
-    tb_log = os.path.join(cfg.tb_dir, "door_sac_curriculum")
+    tb_log = os.path.join(cfg.tb_dir, "tb_open_door_sac_curriculum")
     model = SAC(
         policy         = "MlpPolicy",
         env            = vec,
@@ -143,7 +143,7 @@ def train(cfg: TrainConfig):
         CheckpointCallback(
             save_freq   = max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
             save_path   = os.path.join(cfg.run_dir, "checkpoints"),
-            name_prefix = "door_sac_curriculum",
+            name_prefix = "open_door_sac_curriculum",
             save_replay_buffer = True,
             save_vecnormalize  = True,
         ),
@@ -159,7 +159,7 @@ def train(cfg: TrainConfig):
     ]
 
     model.learn(total_timesteps=int(cfg.total_steps), callback=callbacks)
-    model.save(os.path.join(cfg.run_dir, "final_model_curriculum"))
+    model.save(os.path.join(cfg.run_dir, "final_model_open_curriculum"))
 
 if __name__ == "__main__":
     cfg = TrainConfig()

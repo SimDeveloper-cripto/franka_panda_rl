@@ -7,6 +7,9 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Any, Dict, List, Optional
 
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from config.train_open_config import TrainConfig
 from open_generalized.teacher import StageTeacher
 

@@ -43,7 +43,7 @@ env.training    = False
 env.norm_reward = False
 
 model = SAC.load(
-    f"{run_dir}/final_model_curriculum",
+    f"{run_dir}/final_model_open_curriculum",
     env=env,
 )
 
