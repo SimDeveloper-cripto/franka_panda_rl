@@ -5,3 +5,4 @@ stable-baselines3>=2.3.0
 numpy
 tqdm
 opencv-python
+scipy

@@ -1,7 +1,8 @@
+# close_generalized/env_gen.py
+
 import numpy as np
-# from robosuite.utils import transform_utils as t
-from train_close import RoboSuiteDoorCloseGymnasiumEnv
 from scipy.spatial.transform import Rotation as r
+from train_close import RoboSuiteDoorCloseGymnasiumEnv
 
 class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
     def __init__(self, cfg, render_mode=None):
@@ -23,11 +24,11 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
             pos_offset    = np.random.uniform(-p_var, p_var, size=3)
             pos_offset[2] = 0
             yaw           = np.random.uniform(-r_var, r_var)
+            q_scipy       = r.from_euler('z', yaw).as_quat()
 
-            q_scipy     = r.from_euler('z', yaw).as_quat()
-            quat_offset = np.array([q_scipy[3], q_scipy[0], q_scipy[1], q_scipy[2]])
+            # quat_offset = np.array([q_scipy[3], q_scipy[0], q_scipy[1], q_scipy[2]])
 
-            # Applica al modello MuJoCo
+            # Apply to MuJoCo model
             self._rs_env.sim.model.body_pos[self.door_body_id] = self.base_pos + pos_offset
 
             q_base = r.from_quat([self.base_quat[1], self.base_quat[2], self.base_quat[3], self.base_quat[0]])

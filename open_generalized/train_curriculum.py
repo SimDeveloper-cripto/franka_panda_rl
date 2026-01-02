@@ -164,3 +164,85 @@ def train(cfg: TrainConfig):
 if __name__ == "__main__":
     cfg = TrainConfig()
     train(cfg)
+
+"""
+	Eval num_timesteps = 2950000, episode_reward = 934.92 +/- 7.26
+	Episode length: 501.00 +/- 0.00
+	Success rate  : 100.00%
+	---------------------------------
+	| eval/              |          |
+	|    mean_ep_length  | 501      |
+	|    mean_reward     | 935      |
+	|    success_rate    | 1        |
+	| time/              |          |
+	|    total_timesteps | 2950000  |
+	| train/             |          |
+	|    actor_loss      | -2.59    |
+	|    critic_loss     | 0.000146 |
+	|    ent_coef        | 8.21e-05 |
+	|    ent_coef_loss   | 2.23     |
+	|    learning_rate   | 0.0003   |
+	|    n_updates       | 368737   |
+	---------------------------------
+
+	---------------------------------
+
+	---------------------------------
+	| rollout/           |          |
+	|    ep_len_mean     | 501      |
+	|    ep_rew_mean     | 924      |
+	|    success_rate    | 0.78     |
+	| time/              |          |
+	|    episodes        | 5984     |
+	|    fps             | 114      |
+	|    time_elapsed    | 26026    |
+	|    total_timesteps | 2984848  |
+	| train/             |          |
+	|    actor_loss      | -2.65    |
+	|    critic_loss     | 0.00015  |
+	|    ent_coef        | 7.39e-05 |
+	|    ent_coef_loss   | -6.79    |
+	|    learning_rate   | 0.0003   |
+	|    n_updates       | 373093   |
+	---------------------------------
+
+	---------------------------------
+
+	---------------------------------
+	| rollout/           |          |
+	|    ep_len_mean     | 501      |
+	|    ep_rew_mean     | 920      |
+	|    success_rate    | 0.79     |
+	| time/              |          |
+	|    episodes        | 6008     |
+	|    fps             | 114      |
+	|    time_elapsed    | 26116    |
+	|    total_timesteps | 2996872  |
+	| train/             |          |
+	|    actor_loss      | -2.61    |
+	|    critic_loss     | 0.000108 |
+	|    ent_coef        | 7.32e-05 |
+	|    ent_coef_loss   | -7.4     |
+	|    learning_rate   | 0.0003   |
+	|    n_updates       | 374596   |
+	---------------------------------
+
+	Eval num_timesteps = 3000000, episode_reward = 909.73 +/- 100.56
+	Episode length: 501.00 +/- 0.00
+	Success rate  : 95.00%
+	---------------------------------
+	| eval/              |          |
+	|    mean_ep_length  | 501      |
+	|    mean_reward     | 910      |
+	|    success_rate    | 0.95     |
+	| time/              |          |
+	|    total_timesteps | 3000000  |
+	| train/             |          |
+	|    actor_loss      | -2.62    |
+	|    critic_loss     | 8.53e-05 |
+	|    ent_coef        | 7.24e-05 |
+	|    ent_coef_loss   | -2.41    |
+	|    learning_rate   | 0.0003   |
+	|    n_updates       | 374987   |
+	---------------------------------
+"""
