@@ -17,6 +17,7 @@ Anche con policy deterministica, piccoli jitter possono emergere per:
 
 # TODO FARE ATTENZIONE AI RISULTATI (LE CARTELLE) DEI VARI TRAIN (PER IL PLAY)
 # TODO PREPARARE DOCUMENTAZIONE
+# TODO COMPLETARE HELP MAKEFILE
 
 from __future__ import annotations
 
