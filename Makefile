@@ -24,11 +24,15 @@ play_close_gen:
 	$(PYTHON) $(SCRIPT_CLOSE_GEN) --play --model $(MODEL_PATH_CLOSE_GEN)
 
 help:
-	@echo "[INFO: python 3.10 necessario] Comandi:"
-	@echo "  make train_<task> - Avvia l'addestramento del modello"
-	@echo "  make play_<task>  - Avvia la valutazione (test) del modello salvato"
-	@echo "  make board        - Avvia TensorBoard per monitorare i log"
-	@echo "  make clean        - Rimuove i file temporanei di Python"
+	@echo "[INFO: python 3.10 necessario]"
+	@echo "[INFO: task open/close]"
+	@echo "Comandi:"
+	@echo "  make train_<task>     - Avvia l'addestramento del modello"
+	@echo "  make play_<task>      - Avvia la valutazione (test) del modello salvato"
+	@echo "  make train_<task>_gen - Avvia l'addestramento del modello con generalizzazione"
+	@echo "  make play_<task>_gen  - Avvia la valutazione (test) del modello salvato con generalizzazione"
+	@echo "  make board            - Avvia TensorBoard per monitorare i log"
+	@echo "  make clean            - Rimuove i file temporanei di Python"
 
 train_open:
 	$(PYTHON) $(SCRIPT) --total-steps $(STEPS) --num-envs $(ENVS)

@@ -24,14 +24,15 @@ class AdaptiveCurriculumCallback(BaseCallback):
         if self.n_calls % self.check_freq == 0:
             sr = self.success_cb.successes / max(1, self.success_cb.episodes)
             current_level = self.training_env.get_attr("curriculum_level")[0]
-            if sr > 0.80 and current_level < 1.0:
-                new_level = min(1.0, current_level + 0.1)
-                self.training_env.env_method("set_curriculum_level", new_level)
-                self.success_cb.successes = 0
-                self.success_cb.episodes = 0
-                print(f"\n[CURRICULUM] Level Up: {new_level:.2f} (SR: {sr:.2f})")
-        return True
 
+            if sr > 0.85 and current_level < 1.0:
+                new_level = min(1.0, current_level + 0.05)
+                self.training_env.env_method("set_curriculum_level", new_level)
+
+                self.success_cb.successes = 0
+                self.success_cb.episodes  = 0
+                print(f"\n[CURRICULUM] Level Up: {new_level:.2f} (SR: {sr:.2f}) - Ottimizzazione braccio in corso...")
+        return True
 
 def main():
     parser = argparse.ArgumentParser()
@@ -39,8 +40,7 @@ def main():
     parser.add_argument("--model", type=str, default="runs/door_gen/best_model.zip")
     args = parser.parse_args()
 
-    # total_steps=2000000
-    my_cfg = TrainConfig(run_dir="runs/door_gen", total_steps=500_000, num_envs=4)
+    my_cfg = TrainConfig(run_dir="runs/door_gen", total_steps=460_000, num_envs=4)
 
     if args.play:
         env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg, render_mode="human")])
@@ -48,29 +48,26 @@ def main():
 
         vn_path = os.path.join(os.path.dirname(args.model), "vecnormalize.pkl")
         if os.path.exists(vn_path):
-            env = VecNormalize.load(vn_path, env)
-            env.training = False
+            env             = VecNormalize.load(vn_path, env)
+            env.training    = False
             env.norm_reward = False
 
         model = SAC.load(args.model, env=env)
-        obs = env.reset()
+        obs   = env.reset()
 
-        # --- LOGICA PER PLAY FLUIDO ---
         prev_action = np.zeros(env.action_space.shape)
-        alpha = 0.15  # Smoothing: più basso è, più il movimento è "morbido"
-        target_dt = 1.0 / my_cfg.control_freq
+        alpha       = 0.15
+        target_dt   = 1.0 / my_cfg.control_freq
 
         print("[INFO] Playing in Real-Time...")
         while True:
             start_t = time.perf_counter()
 
-            action, _ = model.predict(obs, deterministic=True)
-            # Smoothing dell'azione per evitare movimenti bruschi
-            action = alpha * action + (1.0 - alpha) * prev_action
+            action, _   = model.predict(obs, deterministic=True)
+            action      = alpha * action + (1.0 - alpha) * prev_action
             prev_action = action.copy()
-
             step_result = env.step(action)
-            # Safe unpacking dei 4 o 5 valori
+
             if len(step_result) == 5:
                 obs, _, terminated, truncated, _ = step_result
                 done = np.logical_or(terminated, truncated)
@@ -79,7 +76,6 @@ def main():
 
             env.render()
 
-            # Sincronizzazione al tempo reale
             elapsed = time.perf_counter() - start_t
             if elapsed < target_dt:
                 time.sleep(target_dt - elapsed)
@@ -88,7 +84,7 @@ def main():
                 obs = env.reset()
                 prev_action[:] = 0
     else:
-        # Codice di training invariato
+        # Train
         os.makedirs(my_cfg.run_dir, exist_ok=True)
         env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg) for _ in range(my_cfg.num_envs)])
         env = VecMonitor(env)
