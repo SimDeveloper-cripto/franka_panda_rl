@@ -162,7 +162,7 @@ def train(cfg: TrainConfig):
     model.save(os.path.join(cfg.run_dir, "final_model_open_curriculum"))
 
 if __name__ == "__main__":
-    cfg = TrainConfig()
+    cfg = TrainConfig(run_dir="runs/open_gen")
     train(cfg)
 
 """

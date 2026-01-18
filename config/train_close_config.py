@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class TrainConfig:
     seed   : int = 42
-    run_dir: str = "runs/door_close_sac"
+    run_dir: str = "runs/close_det"  # "runs/door_close_sac"
     tb_dir : str = "runs/tb"
 
     env_name    : str = "Door"

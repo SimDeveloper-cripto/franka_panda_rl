@@ -54,7 +54,6 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
 
             self._rs_env.sim.model.body_pos[self.door_body_id] = self.base_pos + pos_offset
 
-            # Applica rotazione (correzione ordine quaternioni MuJoCo: [w, x, y, z])
             q_base = r.from_quat([self.base_quat[1], self.base_quat[2], self.base_quat[3], self.base_quat[0]])
             q_new  = r.from_quat(q_scipy) * q_base
             res_q  = q_new.as_quat()

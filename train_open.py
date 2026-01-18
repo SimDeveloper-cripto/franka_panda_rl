@@ -373,7 +373,7 @@ def train(cfg: TrainConfig):
         CheckpointCallback(
             save_freq=max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
             save_path=os.path.join(cfg.run_dir, "checkpoints"),
-            name_prefix="door_sac",
+            name_prefix="open_det",
             save_replay_buffer=True,
             save_vecnormalize=True,
         ),
@@ -444,7 +444,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total-steps", type=int, default=3_000_000)
     p.add_argument("--num-envs",    type=int, default=8)
     p.add_argument("--seed",        type=int, default=123)
-    p.add_argument("--run-dir",     type=str, default="runs/door_sac")
+    p.add_argument("--run-dir",     type=str, default="runs/open_det")
     p.add_argument("--tb-dir",      type=str, default="runs/tb")
 
     p.add_argument("--play",  action="store_true",  help="Run a trained model with on-screen rendering")
@@ -475,7 +475,7 @@ def main():
 
     if args.play:
         if not args.model:
-            raise SystemExit("Missing --model path. Example: --play --model runs/door_sac/best_model.zip")
+            raise SystemExit("Missing --model path. Example: --play --model runs/open_det/best_model.zip")
         play(args.model, cfg)
     else:
         train(cfg)

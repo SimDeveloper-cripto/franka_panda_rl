@@ -348,7 +348,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total-steps", type=int, default=3_000_000)
     p.add_argument("--num-envs",    type=int, default=8)
     p.add_argument("--seed",        type=int, default=42)
-    p.add_argument("--run-dir",     type=str, default="runs/door_close_sac")
+    p.add_argument("--run-dir",     type=str, default="runs/close_det")
     p.add_argument("--tb-dir",      type=str, default="runs/tb")
 
     p.add_argument("--play",  action="store_true")
@@ -376,10 +376,11 @@ def main():
 
     if args.play:
         if not args.model:
-            raise SystemExit("Missing --model. Example: --play --model runs/door_close_sac/best_model.zip")
+            raise SystemExit("Missing --model. Example: --play --model runs/close_det/best_model.zip")
         play(args.model, cfg)
     else:
         train(cfg)
 
 if __name__ == "__main__":
+    # TODO DETERMINISTIC CLOSE NEEDS FIX
     main()

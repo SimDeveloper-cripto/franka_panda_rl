@@ -37,10 +37,10 @@ class AdaptiveCurriculumCallback(BaseCallback):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--play", action="store_true")
-    parser.add_argument("--model", type=str, default="runs/door_gen/best_model.zip")
+    parser.add_argument("--model", type=str, default="runs/close_gen/best_model.zip")
     args = parser.parse_args()
 
-    my_cfg = TrainConfig(run_dir="runs/door_gen", total_steps=460_000, num_envs=4)
+    my_cfg = TrainConfig(run_dir="runs/close_gen", total_steps=460_000, num_envs=4)
 
     if args.play:
         env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg, render_mode="human")])

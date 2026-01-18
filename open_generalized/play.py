@@ -33,7 +33,7 @@ env = DummyVecEnv([
     )
 ])
 
-run_dir = "../runs/door_sac"
+run_dir = "../runs/open_gen"
 env = VecNormalize.load(
     f"{run_dir}/checkpoints/door_sac_curriculum_vecnormalize_3000000_steps.pkl",
     env
