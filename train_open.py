@@ -306,6 +306,30 @@ class SuccessRateCallback(BaseCallback):
             self.logger.record("rollout/success_rate", float(sr))
             self.logger.record("rollout/episodes_counted_for_sr", float(self._episodes))
 
+            # Reset stats to get "windowed" success rate (not cumulative from start)
+            self._successes = 0
+            self._episodes  = 0
+
+        return True
+
+class SaveVecNormalizeCallback(BaseCallback):
+    def __init__(self, save_path: str, verbose=1):
+        super().__init__(verbose)
+        self.save_path = save_path
+
+    def _init_callback(self) -> None:
+        if self.save_path is not None:
+            os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.model.get_vec_normalize_env() is not None:
+            try:
+                self.model.get_vec_normalize_env().save(self.save_path)
+                if self.verbose > 0:
+                    print(f"Saved VecNormalize to {self.save_path}")
+            except Exception as e:
+                if self.verbose > 0:
+                    print(f"Failed to save VecNormalize: {e}")
         return True
 
 
@@ -385,6 +409,7 @@ def train(cfg: TrainConfig):
             n_eval_episodes=cfg.n_eval_episodes,
             deterministic=True,
             render=False,
+            callback_on_new_best=SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")) if cfg.vecnormalize else None,
         ),
     ]
 

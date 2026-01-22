@@ -251,8 +251,31 @@ class SuccessRateCallback(BaseCallback):
                 self.ep_success[i] = False
 
         if self.num_timesteps % self.log_every == 0:
-            self.logger.record("rollout/success_rate", self.successes / max(1, self.episodes))
+            sr = self.successes / max(1, self.episodes)
+            self.logger.record("rollout/success_rate", float(sr))
+            self.logger.record("rollout/episodes_counted_for_sr", float(self.episodes))
 
+            # Reset
+            self.successes = 0
+            self.episodes  = 0
+
+        return True
+
+class SaveVecNormalizeCallback(BaseCallback):
+    def __init__(self, save_path: str, verbose=1):
+        super().__init__(verbose)
+        self.save_path = save_path
+
+    def _init_callback(self) -> None:
+        if self.save_path is not None:
+            os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.model.get_vec_normalize_env() is not None:
+            try:
+                self.model.get_vec_normalize_env().save(self.save_path)
+            except Exception:
+                pass
         return True
 
 
@@ -291,7 +314,26 @@ def train(cfg: TrainConfig):
         seed=cfg.seed,
     )
 
-    model.learn(cfg.total_steps, callback=SuccessRateCallback())
+    eval_env = DummyVecEnv([make_env_fn(cfg)])
+    eval_env = VecMonitor(eval_env)
+    if cfg.vecnormalize:
+        eval_env         = VecNormalize(eval_env, norm_obs=True, norm_reward=False)
+        eval_env.obs_rms = env.obs_rms
+
+    from stable_baselines3.common.callbacks import EvalCallback
+
+    eval_cb = EvalCallback(
+        eval_env,
+        best_model_save_path=cfg.run_dir,
+        log_path=os.path.join(cfg.run_dir, "eval"),
+        eval_freq=10000,
+        n_eval_episodes=20,
+        deterministic=True,
+        render=False,
+        callback_on_new_best=SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")),
+    )
+
+    model.learn(cfg.total_steps, callback=[SuccessRateCallback(), eval_cb])
     model.save(os.path.join(cfg.run_dir, "best_model"))
 
     if cfg.vecnormalize:
@@ -382,5 +424,4 @@ def main():
         train(cfg)
 
 if __name__ == "__main__":
-    # TODO DETERMINISTIC CLOSE NEEDS FIX
     main()

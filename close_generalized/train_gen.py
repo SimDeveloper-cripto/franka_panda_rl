@@ -91,70 +91,32 @@ def main():
         env = VecNormalize(env, norm_obs=True, norm_reward=True)
         scb = SuccessRateCallback(log_every=10000)
         ccb = AdaptiveCurriculumCallback(success_callback=scb)
+
+        from stable_baselines3.common.callbacks import EvalCallback
+        from train_close import SaveVecNormalizeCallback
+
+        eval_env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg)])
+        eval_env = VecMonitor(eval_env)
+        if True:
+            eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False)
+            eval_env.obs_rms = env.obs_rms
+
+        eval_cb = EvalCallback(
+            eval_env,
+            best_model_save_path=my_cfg.run_dir,
+            log_path=os.path.join(my_cfg.run_dir, "eval"),
+            eval_freq=10000,
+            n_eval_episodes=20,
+            deterministic=True,
+            render=False,
+            callback_on_new_best=SaveVecNormalizeCallback(save_path=os.path.join(my_cfg.run_dir, "vecnormalize.pkl")),
+        )
+
         model = SAC("MlpPolicy", env, verbose=1, tensorboard_log=my_cfg.tb_dir)
-        model.learn(total_timesteps=my_cfg.total_steps, callback=[scb, ccb])
+        model.learn(total_timesteps=my_cfg.total_steps, callback=[scb, ccb, eval_cb])
         model.save(os.path.join(my_cfg.run_dir, "best_model"))
         env.save(os.path.join(my_cfg.run_dir, "vecnormalize.pkl"))
 
 
 if __name__ == "__main__":
     main()
-
-"""
----------------------------------
-| rollout/           |          |
-|    ep_len_mean     | 477      |
-|    ep_rew_mean     | 1.15e+03 |
-|    success_rate    | 1        |
-| time/              |          |
-|    episodes        | 1008     |
-|    fps             | 155      |
-|    time_elapsed    | 3184     |
-|    total_timesteps | 494744   |
-| train/             |          |
-|    actor_loss      | -2.22    |
-|    critic_loss     | 0.000354 |
-|    ent_coef        | 0.000167 |
-|    ent_coef_loss   | 9.66     |
-|    learning_rate   | 0.0003   |
-|    n_updates       | 123660   |
----------------------------------
-
----------------------------------
-| rollout/           |          |
-|    ep_len_mean     | 477      |
-|    ep_rew_mean     | 1.15e+03 |
-|    success_rate    | 1        |
-| time/              |          |
-|    episodes        | 1012     |
-|    fps             | 155      |
-|    time_elapsed    | 3196     |
-|    total_timesteps | 496744   |
-| train/             |          |
-|    actor_loss      | -2.21    |
-|    critic_loss     | 0.000452 |
-|    ent_coef        | 0.000162 |
-|    ent_coef_loss   | 5.03     |
-|    learning_rate   | 0.0003   |
-|    n_updates       | 124160   |
----------------------------------
-
----------------------------------
-| rollout/           |          |
-|    ep_len_mean     | 476      |
-|    ep_rew_mean     | 1.14e+03 |
-|    success_rate    | 1        |
-| time/              |          |
-|    episodes        | 1016     |
-|    fps             | 155      |
-|    time_elapsed    | 3206     |
-|    total_timesteps | 498380   |
-| train/             |          |
-|    actor_loss      | -2.3     |
-|    critic_loss     | 0.000336 |
-|    ent_coef        | 0.00016  |
-|    ent_coef_loss   | -5.17    |
-|    learning_rate   | 0.0003   |
-|    n_updates       | 124569   |
----------------------------------
-"""

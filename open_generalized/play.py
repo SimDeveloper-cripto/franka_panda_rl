@@ -7,6 +7,10 @@ from config.train_open_config import TrainConfig
 from open_generalized.env_goal_door import GoalDoorEnv
 from open_generalized.teacher import StageTeacher, StageSpec
 
+import os
+current_dir  = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+
 cfg        = TrainConfig()
 RENDER_FPS = 30.0
 
@@ -33,11 +37,9 @@ env = DummyVecEnv([
     )
 ])
 
-run_dir = "../runs/open_gen"
-env = VecNormalize.load(
-    f"{run_dir}/checkpoints/door_sac_curriculum_vecnormalize_3000000_steps.pkl",
-    env
-)
+run_dir    = os.path.join(project_root, "runs", "open_gen")
+check_path = os.path.join(run_dir, "checkpoints", "open_door_sac_curriculum_vecnormalize_3000000_steps.pkl")
+env        = VecNormalize.load(check_path, env)
 
 env.training    = False
 env.norm_reward = False
