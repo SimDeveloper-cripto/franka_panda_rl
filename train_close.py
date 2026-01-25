@@ -135,8 +135,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         action       = np.asarray(action, dtype=np.float32)
         action       = np.clip(action, -1.0, 1.0)
 
-        # Could be commented (micro-jitter removal attempt)
-        action[np.abs(action) < 0.05] = 0.0
+        # action[np.abs(action) < 0.05] = 0.0  # (micro-jitter removal attempt)
 
         if self._success_latched:
             action *= 0.2
@@ -151,19 +150,31 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         prev_angle            = float(self._prev_door_angle) if self._prev_door_angle is not None else door_angle
         self._prev_door_angle = door_angle
 
-        delta_close = max(0.0, prev_angle -door_angle)
+        # Check success logic
+        just_succeeded = False
+        if door_angle <= self._success_angle and not self._success_latched:
+            self._success_latched = True
+            just_succeeded        = True
+
+        is_success = self._success_latched
+
+        reward, terminated, truncated = self._calculate_reward(action, obs, rs_done, door_angle, prev_angle, just_succeeded)
+
+        self._prev_action = action.copy()
+
+        info = dict(info or {})
+        info["is_success"] = is_success
+        info["door_angle"] = door_angle
+        return self._flatten_obs(obs), reward, terminated, truncated, info
+
+    def _calculate_reward(self, action, obs, rs_done, door_angle, prev_angle, just_succeeded):
+        delta_close = max(0.0, prev_angle - door_angle)
         if door_angle <= self._success_angle:
             delta_close = 0.0
 
         denom    = (self._door_max - self._door_min)
         progress = 1.0 - (door_angle - self._door_min) / denom
         progress = float(np.clip(progress, 0.0, 1.0))
-
-        just_succeeded = False
-        if door_angle <= self._success_angle and not self._success_latched:
-            self._success_latched = True
-            just_succeeded        = True
-        is_success = self._success_latched
 
         reward = 0.0
         reward += self.cfg.w_progress * progress
@@ -202,18 +213,13 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
             if self._return_hold >= self.cfg.return_hold_steps:
                 terminated = True
 
-        # terminated = bool(is_success and self.cfg.terminate_on_success)
         truncated  = bool(self._step_count >= self.cfg.horizon)
 
         if bool(rs_done) and not terminated:
             truncated = True
+        
+        return reward, terminated, truncated
 
-        self._prev_action = action.copy()
-
-        info = dict(info or {})
-        info["is_success"] = is_success
-        info["door_angle"] = door_angle
-        return self._flatten_obs(obs), reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode == "human":
@@ -274,8 +280,8 @@ class SaveVecNormalizeCallback(BaseCallback):
         if self.model.get_vec_normalize_env() is not None:
             try:
                 self.model.get_vec_normalize_env().save(self.save_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(str(e))
         return True
 
 
@@ -356,8 +362,16 @@ def play(model_path: str, cfg: TrainConfig):
 
     obs = venv.reset()
 
+    # Render initial frame and wait
+    if isinstance(venv, VecNormalize):
+        venv.venv.render()
+    else:
+        venv.render()
+    print("Scene loaded, waiting 2 seconds...")
+    time.sleep(2.0)
+
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
-    alpha = 0.1
+    alpha = 1.0
 
     target_dt = 1.0 / float(cfg.control_freq)
     next_t    = time.perf_counter()

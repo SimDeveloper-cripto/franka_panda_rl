@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Tuple
 from dataclasses import dataclass
 
+"""
+    - Identified the cause of the 'struggling' behavior.
+    - The w_action penalty (0.05) is high relative to the time_penalty (0.002), causing the optimal policy
+        to use only ~20% force to minimize cost, resulting in slow/weak movement despite high success rate.
+"""
+
 @dataclass
 class TrainConfig:
     seed   : int = 42
@@ -46,11 +52,14 @@ class TrainConfig:
 
     w_progress   : float = 2.0
     w_delta      : float = 2.0
-    w_action     : float = 0.05
-    time_penalty : float = 0.002
-    success_bonus: float = 5.0
 
-    debug_print_every: int = 200
+    # 1. Il robot non deve avere paura di spingere
+    # 2. Deve avere più "fretta" di muoversi
+    w_action     : float = 0.002  # was 0.001, was 0.05 way before
+    time_penalty : float = 0.04   # was 0.002
+
+    success_bonus    : float = 5.0
+    debug_print_every: int   = 200
 
     # Post-success: return to start
     enable_return_stage: bool  = True
