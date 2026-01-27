@@ -363,12 +363,14 @@ def play(model_path: str, cfg: TrainConfig):
     obs = venv.reset()
 
     # Render initial frame and wait
-    if isinstance(venv, VecNormalize):
-        venv.venv.render()
-    else:
-        venv.render()
     print("Scene loaded, waiting 2 seconds...")
-    time.sleep(2.0)
+    start_wait = time.time()
+    while time.time() - start_wait < 2.0:
+        if isinstance(venv, VecNormalize):
+            venv.venv.render()
+        else:
+            venv.render()
+        time.sleep(0.2)
 
     prev_action = np.zeros(venv.action_space.shape, dtype=np.float32)
     alpha = 1.0

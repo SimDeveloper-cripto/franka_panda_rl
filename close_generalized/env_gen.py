@@ -17,7 +17,7 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
     def set_curriculum_level(self, level: float):
         self.curriculum_level = np.clip(level, 0.0, 1.0)
 
-    def reward(self, action=None):
+    def _calculate_reward(self, action, obs, rs_done, door_angle, prev_angle, just_succeeded):
         """
             1. Penalità d'azione costante per favorire l'efficienza.
             2. Bonus statico di chiusura.
@@ -25,22 +25,20 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
         """
 
         # Otteniamo il reward base (sparse + dense) dalla classe madre
-        reward = super().reward(action)
+        reward, terminated, truncated = super()._calculate_reward(action, obs, rs_done, door_angle, prev_angle, just_succeeded)
 
-        door_qpos = self._rs_env.sim.data.qpos[self._rs_env.door_handle_qpos_addr]
+        door_qpos = self._rs_env.sim.data.qpos[self._rs_env.handle_qpos_addr]
         is_closed = abs(door_qpos) < 0.03
 
         if action is not None:
             reward -= 0.02 * np.linalg.norm(action)
             if is_closed:
-                reward -= 0.5 * np.linalg.norm(action)
-                reward += 2.0
-
+                reward  -= 0.5 * np.linalg.norm(action)
                 arm_vel = np.linalg.norm(self._rs_env.sim.data.qvel[self._rs_env.robots[0]._ref_joint_vel_indexes])
                 if arm_vel < 0.1:
                     reward += 0.5
 
-        return reward
+        return reward, terminated, truncated
 
     def reset(self, seed=None, options=None):
         p_var = 0.15 * self.curriculum_level

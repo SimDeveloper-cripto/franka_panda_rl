@@ -56,7 +56,8 @@ def main():
         obs   = env.reset()
 
         prev_action = np.zeros(env.action_space.shape)
-        alpha       = 0.15
+        # smoothing the action
+        alpha       = 0.5 # was 1.0 but with this adjustment we use 50% old and 50% new action
         target_dt   = 1.0 / my_cfg.control_freq
 
         print("[INFO] Playing in Real-Time...")
