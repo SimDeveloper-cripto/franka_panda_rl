@@ -3,6 +3,14 @@
 import numpy as np
 import os, sys, time, argparse
 
+from dotenv import load_dotenv
+load_dotenv()
+
+if os.name == "nt":
+    mujoco_path = os.getenv("MUJOCO_PATH")
+    if mujoco_path and os.path.exists(mujoco_path):
+        os.add_dll_directory(mujoco_path)
+
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, VecMonitor
@@ -40,7 +48,7 @@ def main():
     parser.add_argument("--model", type=str, default="runs/close_gen/best_model.zip")
     args = parser.parse_args()
 
-    my_cfg = TrainConfig(run_dir="runs/close_gen", total_steps=460_000, num_envs=4)
+    my_cfg = TrainConfig(run_dir="runs/close_gen", total_steps=500_000, num_envs=4)
 
     if args.play:
         env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg, render_mode="human")])

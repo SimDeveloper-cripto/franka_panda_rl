@@ -3,7 +3,15 @@
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
+if os.name == "nt":
+    mujoco_path = os.getenv("MUJOCO_PATH")
+    if mujoco_path and os.path.exists(mujoco_path):
+        os.add_dll_directory(mujoco_path)
+
 import time
 import json
 import argparse
@@ -362,7 +370,6 @@ def play(model_path: str, cfg: TrainConfig):
 
     obs = venv.reset()
 
-    # Render initial frame and wait
     print("Scene loaded, waiting 2 seconds...")
     start_wait = time.time()
     while time.time() - start_wait < 2.0:

@@ -18,6 +18,16 @@ Anche con policy deterministica, piccoli jitter possono emergere per:
 from __future__ import annotations
 
 import os
+import sys
+
+from dotenv import load_dotenv
+load_dotenv()
+
+if os.name == "nt":
+    mujoco_path = os.getenv("MUJOCO_PATH")
+    if mujoco_path and os.path.exists(mujoco_path):
+        os.add_dll_directory(mujoco_path)
+
 import time
 import json
 import argparse

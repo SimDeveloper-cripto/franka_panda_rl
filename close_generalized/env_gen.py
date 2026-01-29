@@ -24,6 +24,41 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
             3. Azzeramento dei movimenti superflui una volta completato il task.
         """
 
+        reward, terminated, truncated = super()._calculate_reward(action, obs, rs_done, door_angle, prev_angle, just_succeeded)
+
+        eef_pos    = obs.get("robot0_eef_pos", np.zeros(3))
+        handle_pos = obs.get("handle_pos", obs.get("door_handle_pos", eef_pos)) 
+        eef_quat   = obs.get("robot0_eef_quat", np.array([0, 1, 0, 0]))
+
+        if not self._success_latched:
+            dist_handle = np.linalg.norm(eef_pos - handle_pos)
+            reward -= 1.0 * dist_handle
+
+        # [FIX] Questo probabilmente è un limite legato all'ambiente Robosuite !!
+        # [FIX] Leggere le coordinate 3D reali da MuJoCo può essere una soluzione migliore
+        # [FIX] Non deve spingere con polso o avambraccio
+        if eef_pos[2] < (handle_pos[2] - 0.05):  # could be 0.03
+            reward -= 0.1                        # could be 0.5
+
+        door_qpos = self._rs_env.sim.data.qpos[self._rs_env.handle_qpos_addr]
+        is_closed = abs(door_qpos) < 0.03
+        if action is not None:
+            reward -= 0.02 * np.linalg.norm(action)
+
+            # FIx anti-sollevamento della maniglia
+            # Puniamo solo se intenzionalmente spinge verso l'alto
+            if action[2] > 0.05:
+                # 2.0 è pari al w_progess nel config. Togliamo il guadagno in questo caso
+                reward -= 0.5 * action[2]
+
+            if is_closed:
+                reward  -= 0.5 * np.linalg.norm(action)
+                arm_vel = np.linalg.norm(self._rs_env.sim.data.qvel[self._rs_env.robots[0]._ref_joint_vel_indexes])
+                if arm_vel < 0.1:
+                    reward += 0.5
+        return reward, terminated, truncated
+
+        """
         # Otteniamo il reward base (sparse + dense) dalla classe madre
         reward, terminated, truncated = super()._calculate_reward(action, obs, rs_done, door_angle, prev_angle, just_succeeded)
 
@@ -39,6 +74,7 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                     reward += 0.5
 
         return reward, terminated, truncated
+        """
 
     def reset(self, seed=None, options=None):
         p_var = 0.15 * self.curriculum_level

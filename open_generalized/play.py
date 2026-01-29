@@ -1,5 +1,19 @@
-import time
+import os
+import sys
 
+current_dir  = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.append(project_root)
+
+from dotenv import load_dotenv
+load_dotenv()
+
+if os.name == "nt":
+    mujoco_path = os.getenv("MUJOCO_PATH")
+    if mujoco_path and os.path.exists(mujoco_path):
+        os.add_dll_directory(mujoco_path)
+
+import time
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 

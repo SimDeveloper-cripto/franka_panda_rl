@@ -46,3 +46,9 @@ play_close:
 
 board:
 	tensorboard --logdir $(LOG_DIR)
+
+# OPEN_DET : & .venv\Scripts\python.exe train_open.py --play --model runs/open_det/best_model.zip
+# OPEN_GEN : & .venv\Scripts\python.exe open_generalized/play.py
+# CLOSE_DET: & .venv\Scripts\python.exe train_close.py --play --model runs/close_det/best_model.zip
+
+# CLOSE_GEN: & .venv\Scripts\python.exe close_generalized/train_gen.py --play
