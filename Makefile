@@ -51,4 +51,5 @@ board:
 # OPEN_GEN : & .venv\Scripts\python.exe open_generalized/play.py
 # CLOSE_DET: & .venv\Scripts\python.exe train_close.py --play --model runs/close_det/best_model.zip
 
-# CLOSE_GEN: & .venv\Scripts\python.exe close_generalized/train_gen.py --play
+# TRAIN_CLOSE_GEN: & .venv\Scripts\python.exe close_generalized/train_gen.py
+# PLAY_CLOSE_GEN : & .venv\Scripts\python.exe close_generalized/train_gen.py --play

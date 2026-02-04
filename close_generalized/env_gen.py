@@ -14,6 +14,17 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
         self.base_pos     = np.array(self._rs_env.sim.model.body_pos[self.door_body_id]).copy()
         self.base_quat    = np.array(self._rs_env.sim.model.body_quat[self.door_body_id]).copy()
 
+        # Handle Geom Search for Friction Control
+        self.handle_geom_id = None
+        for i, name in enumerate(self._rs_env.sim.model.geom_names):
+            if "handle" in name.lower():
+                self.handle_geom_id = i
+                break
+        
+        if self.handle_geom_id is not None:
+             self.base_friction = self._rs_env.sim.model.geom_friction[self.handle_geom_id].copy()
+
+
     def set_curriculum_level(self, level: float):
         self.curriculum_level = np.clip(level, 0.0, 1.0)
 
@@ -37,8 +48,9 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
         # [FIX] Questo probabilmente è un limite legato all'ambiente Robosuite !!
         # [FIX] Leggere le coordinate 3D reali da MuJoCo può essere una soluzione migliore
         # [FIX] Non deve spingere con polso o avambraccio
-        if eef_pos[2] < (handle_pos[2] - 0.05):  # could be 0.03
-            reward -= 0.1                        # could be 0.5
+        # [FIX] Penalità aumentata (da 0.1 a 1.0) per impedire approccio dal basso
+        if eef_pos[2] < (handle_pos[2] - 0.05):
+            reward -= 1.0
 
         door_qpos = self._rs_env.sim.data.qpos[self._rs_env.handle_qpos_addr]
         is_closed = abs(door_qpos) < 0.03
@@ -47,9 +59,9 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
 
             # FIx anti-sollevamento della maniglia
             # Puniamo solo se intenzionalmente spinge verso l'alto
+            # Penalità aumentata (da 0.5 a 2.0) per pareggiare il w_progress
             if action[2] > 0.05:
-                # 2.0 è pari al w_progess nel config. Togliamo il guadagno in questo caso
-                reward -= 0.5 * action[2]
+                reward -= 2.0 * action[2]
 
             if is_closed:
                 reward  -= 0.5 * np.linalg.norm(action)
@@ -88,9 +100,32 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
 
             self._rs_env.sim.model.body_pos[self.door_body_id] = self.base_pos + pos_offset
 
+            # Human Distance Override (if configured)
+            if hasattr(self.cfg, "human_dist_min") and hasattr(self.cfg, "human_dist_max"):
+                 # Assume Robot is at [0,0,0]. Door is usually at X > 0.
+                 # We assert distance in X-Y plane (mostly X)
+                 # New Logic: Sample distance r from [min, max], apply to current Yaw direction or just X?
+                 # Simplifying: Just override X of the door to be in the "human" range
+                 # But we must respect the randomization
+                 dist_sample = np.random.uniform(self.cfg.human_dist_min, self.cfg.human_dist_max)
+                 
+                 # Apply slightly noisy offset to Y as well (already done by pos_offset[1])
+                 # We overwrite X to be strictly in this Human Range + small noise
+                 self._rs_env.sim.model.body_pos[self.door_body_id][0] = dist_sample + pos_offset[0]
+
             q_base = r.from_quat([self.base_quat[1], self.base_quat[2], self.base_quat[3], self.base_quat[0]])
             q_new  = r.from_quat(q_scipy) * q_base
             res_q  = q_new.as_quat()
             self._rs_env.sim.model.body_quat[self.door_body_id] = np.array([res_q[3], res_q[0], res_q[1], res_q[2]])
+
+        # Limit Handle Friction
+        if self.handle_geom_id is not None and getattr(self.cfg, "limit_handle_friction", False):
+            max_f = getattr(self.cfg, "handle_friction_max", 0.8)
+            # Apply limit (Mujoco geom_friction is [sliding, torsional, rolling])
+            # We scale the sliding friction (index 0)
+            current_f = self.base_friction[0]
+            if current_f > max_f:
+                self._rs_env.sim.model.geom_friction[self.handle_geom_id][0] = max_f
+
 
         return super().reset(seed=seed, options=options)

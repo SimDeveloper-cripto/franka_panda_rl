@@ -41,7 +41,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
 
     def __init__(self, cfg: TrainConfig, render_mode: Optional[str] = None):
         super().__init__()
-        self.cfg = cfg
+        self.cfg         = cfg
         self.render_mode = render_mode
 
         import robosuite as suite
@@ -63,7 +63,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
             control_freq=cfg.control_freq,
         )
 
-        self._door_hinge_name = "Door_hinge"
+        self._door_hinge_name     = "Door_hinge"
         self._door_hinge_qpos_adr = None
         for name, adr in zip(self._rs_env.sim.model.joint_names, self._rs_env.sim.model.jnt_qposadr):
             if name == self._door_hinge_name:
@@ -73,15 +73,15 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         jid = self._rs_env.sim.model.joint_name2id(self._door_hinge_name)
         self._door_hinge_dof_adr = int(self._rs_env.sim.model.jnt_dofadr[jid])
 
-        jmin, jmax = self._rs_env.sim.model.jnt_range[jid]
+        jmin, jmax     = self._rs_env.sim.model.jnt_range[jid]
         self._door_min = float(jmin)
         self._door_max = float(jmax)
 
         rng = self._door_max - self._door_min
-        self._success_angle = self._door_min + cfg.close_fraction * rng
+        self._success_angle   = self._door_min + cfg.close_fraction * rng
         self._success_latched = False
 
-        low, high = self._rs_env.action_spec
+        low, high         = self._rs_env.action_spec
         self.action_space = spaces.Box(low=low.astype(np.float32), high=high.astype(np.float32), dtype=np.float32)
 
         obs = self._rs_env.reset()
@@ -143,7 +143,10 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         action       = np.asarray(action, dtype=np.float32)
         action       = np.clip(action, -1.0, 1.0)
 
-        # action[np.abs(action) < 0.05] = 0.0  # (micro-jitter removal attempt)
+        # Action Smoothing (EMA)
+        alpha = getattr(self.cfg, "action_smooth_alpha", 1.0)
+        if alpha < 1.0:
+            action = alpha * action + (1.0 - alpha) * self._prev_action
 
         if self._success_latched:
             action *= 0.2
@@ -158,19 +161,16 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         prev_angle            = float(self._prev_door_angle) if self._prev_door_angle is not None else door_angle
         self._prev_door_angle = door_angle
 
-        # Check success logic
         just_succeeded = False
         if door_angle <= self._success_angle and not self._success_latched:
             self._success_latched = True
             just_succeeded        = True
 
-        is_success = self._success_latched
-
+        is_success                    = self._success_latched
         reward, terminated, truncated = self._calculate_reward(action, obs, rs_done, door_angle, prev_angle, just_succeeded)
+        self._prev_action             = action.copy()
 
-        self._prev_action = action.copy()
-
-        info = dict(info or {})
+        info               = dict(info or {})
         info["is_success"] = is_success
         info["door_angle"] = door_angle
         return self._flatten_obs(obs), reward, terminated, truncated, info
@@ -208,14 +208,13 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
                 reward       += self.cfg.w_return_pos * (1.0 - np.tanh(dist_retreat / 0.10))
                 returned     = dist_retreat < self.cfg.return_pos_tol
 
-            # Hold Logic (no extra action penalty is applied)
+            # 3) Hold
             if returned:
                 self._return_hold += 1
             else:
                 self._return_hold = 0
 
         reward     = float(np.clip(reward, -10.0, 10.0))
-
         terminated = False
         if self.cfg.enable_return_stage and self._success_latched:
             if self._return_hold >= self.cfg.return_hold_steps:
@@ -227,7 +226,6 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
             truncated = True
         
         return reward, terminated, truncated
-
 
     def render(self):
         if self.render_mode == "human":

@@ -30,16 +30,15 @@ class AdaptiveCurriculumCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         if self.n_calls % self.check_freq == 0:
-            sr = self.success_cb.successes / max(1, self.success_cb.episodes)
+            sr            = self.success_cb.successes / max(1, self.success_cb.episodes)
             current_level = self.training_env.get_attr("curriculum_level")[0]
 
             if sr > 0.85 and current_level < 1.0:
                 new_level = min(1.0, current_level + 0.05)
                 self.training_env.env_method("set_curriculum_level", new_level)
-
                 self.success_cb.successes = 0
                 self.success_cb.episodes  = 0
-                print(f"\n[CURRICULUM] Level Up: {new_level:.2f} (SR: {sr:.2f}) - Ottimizzazione braccio in corso...")
+                # print(f"\n[CURRICULUM] Level Up: {new_level:.2f} (SR: {sr:.2f}) - Ottimizzazione braccio in corso...")
         return True
 
 def main():
@@ -48,7 +47,7 @@ def main():
     parser.add_argument("--model", type=str, default="runs/close_gen/best_model.zip")
     args = parser.parse_args()
 
-    my_cfg = TrainConfig(run_dir="runs/close_gen", total_steps=500_000, num_envs=4)
+    my_cfg = TrainConfig(run_dir="runs/close_gen", total_steps=400_000, num_envs=4)
 
     if args.play:
         env = DummyVecEnv([lambda: GeneralizedDoorEnv(my_cfg, render_mode="human")])
@@ -64,14 +63,12 @@ def main():
         obs   = env.reset()
 
         prev_action = np.zeros(env.action_space.shape)
-        # smoothing the action
-        alpha       = 0.5 # was 1.0 but with this adjustment we use 50% old and 50% new action
+        alpha       = 0.5
         target_dt   = 1.0 / my_cfg.control_freq
 
         print("[INFO] Playing in Real-Time...")
         while True:
-            start_t = time.perf_counter()
-
+            start_t     = time.perf_counter()
             action, _   = model.predict(obs, deterministic=True)
             action      = alpha * action + (1.0 - alpha) * prev_action
             prev_action = action.copy()
@@ -125,7 +122,6 @@ def main():
         model.learn(total_timesteps=my_cfg.total_steps, callback=[scb, ccb, eval_cb])
         model.save(os.path.join(my_cfg.run_dir, "best_model"))
         env.save(os.path.join(my_cfg.run_dir, "vecnormalize.pkl"))
-
 
 if __name__ == "__main__":
     main()

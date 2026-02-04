@@ -65,5 +65,15 @@ class TrainConfig:
     enable_return_stage: bool  = True
     w_return_pos       : float = 2.0
     w_door_regress     : float = 4.0
-    return_pos_tol     : float = 0.05
     return_hold_steps  : int   = 10
+
+    # -------------------------------------------------------------------- #
+
+    return_pos_tol      : float = 0.05
+    action_smooth_alpha : float = 0.8
+
+    limit_handle_friction : bool  = True
+    handle_friction_max   : float = 0.8
+
+    human_dist_min : float = 0.50
+    human_dist_max : float = 0.60
