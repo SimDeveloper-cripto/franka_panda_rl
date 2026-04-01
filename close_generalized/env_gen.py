@@ -199,8 +199,8 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                     reward -= 15.0 * (_GRIPPER_CLOSE_THRESH - gripper_action)
 
                 # Contatore grasp: reset duro se gripper si apre o non stringe fisicamente
-                # Richiediamo sia l'intento logico (azione) sia la chiusura meccanica
-                if gripper_action > _GRIPPER_CLOSE_THRESH and is_physically_closed:
+                # Richiediamo chiusura meccanica E un centramento millimetrico (dist < 0.035) sulle dita!
+                if gripper_action > _GRIPPER_CLOSE_THRESH and is_physically_closed and dist_handle < 0.035:
                     self._grasp_confirm_count += 1
                 else:
                     self._grasp_confirm_count = 0
@@ -231,10 +231,10 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                 reward -= _W_ACTION_PHASE2 * np.linalg.norm(action[:-1])
 
             # [FIX 10] Condizione duale hard per mantenere fase 2.
-            # I log mostrano gripper aperto (-0.91, -0.16) con confirm=5/5:
-            # Ora richiediamo che sia chiuso ANCHE a livello fisico per mantenere la presa
+            # [FIX 11] Addio spinta col polso. Abbassiamo drasticamente le tolleranze di fase 2.
+            # Se l'end-effector è a più di 4-5cm dal centro maniglia, la maniglia non è più tra le dita!
             door_moving = (prev_angle is not None and prev_angle - door_angle > 0.001)
-            effective_lose_tol = grip_tol * 2.5 if door_moving else grip_tol * 1.3
+            effective_lose_tol = 0.05 if door_moving else 0.04
 
             gripper_action_lost = gripper_action < _GRIPPER_CLOSE_THRESH
             gripper_lost = gripper_action_lost or not is_physically_closed
@@ -269,23 +269,22 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
             reward += base_reward
 
             if is_closed:
+                # Premio stazionario se sta chiusa
                 reward += 1.0 - abs(door_qpos)
                 if abs(door_qpos) < 0.02:
-                    if gripper_action < -0.5:
-                        reward += 0.5
-                    arm_vel = np.linalg.norm(
-                        self._rs_env.sim.data.qvel[
-                            self._rs_env.robots[0]._ref_joint_vel_indexes
-                        ]
-                    )
-                    reward -= 0.5 * arm_vel
-                    if action is not None:
-                        reward -= 1.0 * np.linalg.norm(action[:7])
-                    if arm_vel < 0.05 and (action is None or np.linalg.norm(action[:7]) < 0.1):
-                        reward += 1.0
+                    # Rimuoviamo il controllo millimetrico sulla velocity (che induceva overfitting)!
+                    # Basta mollare la presa e starsene buoni (gripper aperto per fermare l'episodio)
+                    if gripper_action < -0.3:
+                        reward += 1.0  # bonus per il rilascio
                         self._return_hold += 1
-                        if self._return_hold > 10:
+                        # Terminale rapido forzato per non lasciarlo contorcere ad oltranza
+                        if self._return_hold > 5:
+                            reward += 10.0  # Gran finale
                             terminated = True
+                    else:
+                        self._return_hold = 0
+                        # Punisci se cerca di forzare ulteriormente o non rilascia
+                        reward -= 0.5 * abs(gripper_action + 1.0)
 
         return reward, terminated, truncated
 
