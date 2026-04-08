@@ -181,6 +181,11 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                         alignment = abs(np.dot(eef_z, dir_to_handle))
                         # Penalità che cresce se l'end-effector non è allineato all'asse
                         reward -= 2.0 * (1.0 - alignment) * np.exp(-40.0 * dist_handle)
+                        
+                        # Controllo roll per rendere la presa umana (orizzontale)
+                        eef_x = rmat[:, 0]
+                        flat_alignment = abs(eef_x[2]) 
+                        reward -= 1.5 * flat_alignment * np.exp(-10.0 * dist_handle)
 
             # Logica gripper (Zero bonus positivi, solo transizioni smussate di penalità)
             if dist_handle > grip_tol * 2.5:
@@ -272,19 +277,41 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                 # Premio stazionario se sta chiusa
                 reward += 1.0 - abs(door_qpos)
                 if abs(door_qpos) < 0.02:
-                    # Rimuoviamo il controllo millimetrico sulla velocity (che induceva overfitting)!
-                    # Basta mollare la presa e starsene buoni (gripper aperto per fermare l'episodio)
-                    if gripper_action < -0.3:
-                        reward += 1.0  # bonus per il rilascio
-                        self._return_hold += 1
-                        # Terminale rapido forzato per non lasciarlo contorcere ad oltranza
-                        if self._return_hold > 5:
-                            reward += 10.0  # Gran finale
-                            terminated = True
+                    control_freq = self.cfg.control_freq
+                    target_hold_steps = int(control_freq * 1.0) # 1 secondo
+
+                    if not hasattr(self, "_hold_closed_duration"):
+                        self._hold_closed_duration = 0
+
+                    if self._hold_closed_duration < target_hold_steps:
+                        self._hold_closed_duration += 1
+                        
+                        if gripper_action > _GRIPPER_CLOSE_THRESH:
+                            reward += 1.0
+                        else:
+                            reward -= 2.0 * abs(gripper_action - _GRIPPER_CLOSE_THRESH)
+                        
+                        if action is not None:
+                            action_norm = np.linalg.norm(action[:-1])
+                            if action_norm < 0.05:
+                                reward += 1.0
+                            else:
+                                reward -= 2.0 * action_norm
                     else:
-                        self._return_hold = 0
-                        # Punisci se cerca di forzare ulteriormente o non rilascia
-                        reward -= 0.5 * abs(gripper_action + 1.0)
+                        if gripper_action < _GRIPPER_OPEN_THRESH:
+                            reward += 2.0
+                            self._return_hold += 1
+                            if self._return_hold > 5:
+                                reward += 10.0
+                                terminated = True
+                        else:
+                            self._return_hold = 0
+                            reward -= 1.0 * abs(gripper_action + 1.0)
+                        
+                        if action is not None:
+                            reward -= 1.0 * np.linalg.norm(action[:-1])
+            else:
+                self._hold_closed_duration = 0
 
         return reward, terminated, truncated
 
@@ -294,6 +321,7 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
         self._grasp_confirm_count = 0
         self._grasp_lose_count    = 0
         self._return_hold         = 0
+        self._hold_closed_duration = 0
         self._prev_door_angle     = None
         # _diag_step NON resettato: mostra progresso globale nel log
 
