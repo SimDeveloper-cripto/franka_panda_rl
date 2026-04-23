@@ -1,42 +1,4 @@
 # close_generalized/env_gen.py
-#
-# STORIA DEI FIX (cronologica dai log reali)
-# ==========================================
-#
-# FIX 1 — Reward Z esplicito: il robot era sistematicamente 6-8cm sotto la
-#   maniglia. Aggiunto -W_Z*|height_diff| in fase 1. Risolto a 200K steps.
-#
-# FIX 2 — Penalità azione = 0 in fase 1: -0.3/step × 400 step = -120
-#   insegnava al robot a stare fermo invece di cercare la maniglia.
-#
-# FIX 3 — w_action=0 nel config: la classe madre applicava w_action
-#   separatamente, vanificando FIX 2 dall'esterno.
-#
-# FIX 4 — Reward lineare invece di esponenziale: gradiente costante
-#   invece di quasi-zero a distanze > 0.10m.
-#
-# FIX 5 — Penalità hard per gripper aperto dentro tolerance (-15*|grip|):
-#   ent_coef era crollato a 0.00015, il robot non esplorava mai grip>0.
-#   La penalità negativa crea gradiente senza dipendere dall'esplorazione.
-#
-# FIX 6 — _GRIPPER_CLOSE_THRESH 0.4→0.6: log mostravano grip=+0.13
-#   confermato come grasp. Soglia alzata per richiedere presa reale.
-#
-# FIX 7 — Reset contatore solo se gripper aperto (non se fuori tolerance
-#   con gripper chiuso): quando la porta ruota, la maniglia si sposta e
-#   l'eef esce dalla tolerance pur tenendo la presa. Reset duro precedente
-#   causava reward hacking: robot restava a dist≈0.03 con grip=+0.99
-#   senza mai confermare il grasp, accumulando +10*grip continuamente.
-#
-# FIX 8 — Reward progress condizionato al grasp in fase 2:
-#   base_reward della madre premia il progresso sulla porta anche senza
-#   grasp reale. Aggiunto reward amplificato solo quando gripper chiuso
-#   E porta si sta chiudendo: segnale pulito che separa pushing da grasp.
-#
-# FIX 9 — gamma 0.99→0.95 nel config: con gamma=0.99 il critic propaga
-#   reward lontani 100+ step quasi ugualmente a reward immediati.
-#   La sequenza reach→grasp→close ha credito temporale lungo e il critic
-#   fatica. Con 0.95 apprende la causalità più velocemente.
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R_scipy
@@ -69,9 +31,7 @@ _W_GRASP_BONUS    = 10.0  # bonus one-shot alla conferma del grasp
 _W_GRASP_LOST     = 6.0   # penalità per grasp perso
 _W_PROGRESS_GRASP = 5.0   # [FIX 8] amplifica progress porta solo con grasp attivo
 _W_ACTION_PHASE2  = 0.005 # penalità azione leggera in fase 2
-# Fase 1: penalità azione = 0 [FIX 2]
 _W_ACTION_PHASE1  = 0.0
-
 
 class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
 
@@ -258,9 +218,9 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
             else:
                 self._grasp_lose_count = 0
 
-            # Mantieni gripper chiuso durante la spinta
-            if gripper_action < 0:
-                reward -= 3.0 * abs(gripper_action)
+            # Mantieni gripper completamente chiuso e forzato durante la spinta per evitare scivolamenti
+            if gripper_action < 1.0:
+                reward -= 5.0 * (1.0 - gripper_action)
 
             # Anti-sollevamento maniglia
             if action is not None and action[2] > 0.05:
@@ -278,7 +238,7 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                 reward += 1.0 - abs(door_qpos)
                 if abs(door_qpos) < 0.02:
                     control_freq = self.cfg.control_freq
-                    target_hold_steps = int(control_freq * 1.0) # 1 secondo
+                    target_hold_steps = int(control_freq * 2.0) # 2 secondi
 
                     if not hasattr(self, "_hold_closed_duration"):
                         self._hold_closed_duration = 0
@@ -297,6 +257,14 @@ class GeneralizedDoorEnv(RoboSuiteDoorCloseGymnasiumEnv):
                                 reward += 1.0
                             else:
                                 reward -= 2.0 * action_norm
+
+                        # Ritorna la maniglia (e l'end-effector) alla sua posizione neutrale/orizzontale
+                        eef_quat = obs.get("robot0_eef_quat")
+                        if eef_quat is not None:
+                            rmat = R_scipy.from_quat(eef_quat).as_matrix()
+                            eef_x = rmat[:, 0]
+                            flat_alignment = abs(eef_x[2]) 
+                            reward -= 5.0 * flat_alignment
                     else:
                         if gripper_action < _GRIPPER_OPEN_THRESH:
                             reward += 2.0
