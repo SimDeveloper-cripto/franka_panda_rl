@@ -31,3 +31,10 @@ pip install --no-deps -r requirements.txt
 pip install -r requirements.txt
 mjpython close_generalized/train_gen.py --play
 ```
+
+## Results
+
+Coming soon with v2 !!
+
+## 📄 License
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

@@ -1,3 +1,5 @@
+# For macOS
+
 torch==2.10.0+cpu
 numpy==2.2.6
 scipy==1.15.3

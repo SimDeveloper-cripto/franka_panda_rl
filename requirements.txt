@@ -1,6 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Required python3.10
+# For Windows and Linux
 # pip install --no-deps -r requirements.txt
 
 torch==2.10.0+cpu

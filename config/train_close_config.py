@@ -24,7 +24,7 @@ class TrainConfig:
     num_envs    : int  = 8
     vecnormalize: bool = True
 
-    total_steps    : int   = 1_200_000
+    total_steps    : int   = 1_000_000
     learning_rate  : float = 3e-4
     buffer_size    : int   = 1_000_000
     batch_size     : int   = 256
@@ -32,10 +32,10 @@ class TrainConfig:
     tau            : float = 0.005
     train_freq     : int   = 1
     gradient_steps : int   = 2
-    learning_starts: int   = 5_000
+    learning_starts: int   = 10_000
     ent_coef       : str   = "auto"
 
-    policy_net_arch: Tuple[int, int] = (256, 256)
+    policy_net_arch: Tuple[int, int] = (512, 512)
 
     eval_freq      : int = 50_000
     n_eval_episodes: int = 10
@@ -46,15 +46,15 @@ class TrainConfig:
     init_open_min_fraction: float = 0.70
     init_open_max_fraction: float = 1.00
 
-    w_progress   : float = 2.0
+    w_progress   : float = 0.0
     w_delta      : float = 2.0
     w_action     : float = 0.0
-    time_penalty : float = 0.0
+    time_penalty : float = 0.5
 
     success_bonus    : float = 5.0
     debug_print_every: int   = 200
 
-    enable_return_stage: bool  = False
+    enable_return_stage: bool  = True
     w_return_pos       : float = 2.0
     w_door_regress     : float = 4.0
     return_hold_steps  : int   = 10

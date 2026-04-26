@@ -19,6 +19,17 @@ import numpy as np
 from dataclasses import asdict
 from typing import Dict, Any, Optional
 
+import warnings
+import logging
+
+warnings.filterwarnings("ignore")
+
+logging.getLogger("robosuite").setLevel(logging.ERROR)
+logging.getLogger("numba").setLevel(logging.ERROR)
+
+os.environ["KMP_WARNINGS"] = "off"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import gymnasium as gym
 from gymnasium import spaces
 from config.train_close_config import TrainConfig
@@ -45,22 +56,24 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         self.render_mode = render_mode
 
         import robosuite as suite
+        import robosuite.macros as macros
+        macros.LOGGING_LEVEL = logging.ERROR
         from robosuite.controllers import load_composite_controller_config
 
         controller_config = load_composite_controller_config(controller="BASIC")
 
         self._rs_env = suite.make(
-            env_name=cfg.env_name,
-            robots=cfg.robot,
-            controller_configs=controller_config,
-            has_renderer=(render_mode == "human"),
-            has_offscreen_renderer=False,
-            use_camera_obs=cfg.use_camera_obs,
-            use_object_obs=cfg.use_object_obs,
-            reward_shaping=cfg.reward_shaping,
-            reward_scale=cfg.reward_scale,
-            horizon=cfg.horizon,
-            control_freq=cfg.control_freq,
+            env_name               = cfg.env_name,
+            robots                 = cfg.robot,
+            controller_configs     = controller_config,
+            has_renderer           = (render_mode == "human"),
+            has_offscreen_renderer = False,
+            use_camera_obs         = cfg.use_camera_obs,
+            use_object_obs         = cfg.use_object_obs,
+            reward_shaping         = cfg.reward_shaping,
+            reward_scale           = cfg.reward_scale,
+            horizon                = cfg.horizon,
+            control_freq           = cfg.control_freq,
         )
 
         self._door_hinge_name     = "Door_hinge"
@@ -85,7 +98,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         self.action_space = spaces.Box(low=low.astype(np.float32), high=high.astype(np.float32), dtype=np.float32)
 
         obs = self._rs_env.reset()
-        self._obs_keys = sorted(k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 1)
+        self._obs_keys = sorted(k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim in (0, 1) or np.isscalar(v))
         flat = self._flatten_obs(obs)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=flat.shape, dtype=np.float32)
 
@@ -102,7 +115,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         self._prev_action = np.zeros(self.action_space.shape, dtype=np.float32)
 
     def _flatten_obs(self, obs: Dict[str, Any]) -> np.ndarray:
-        return np.concatenate([obs[k].astype(np.float32).ravel() for k in self._obs_keys])
+        return np.concatenate([np.atleast_1d(np.asarray(obs[k], dtype=np.float32)).ravel() for k in self._obs_keys])
 
     def _get_door_angle(self) -> float:
         return float(np.clip(self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr], self._door_min, self._door_max))
@@ -124,9 +137,9 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
             self._retreat_pos = self._start_eef_pos + np.array([0.0, -0.15, 0.10], dtype=np.float32)
         self._prev_action[:] = 0.0
 
-        rng = self._door_max - self._door_min
-        lo = self._door_min + self.cfg.init_open_min_fraction * rng
-        hi = self._door_min + self.cfg.init_open_max_fraction * rng
+        rng   = self._door_max - self._door_min
+        lo    = self._door_min + self.cfg.init_open_min_fraction * rng
+        hi    = self._door_min + self.cfg.init_open_max_fraction * rng
         angle = np.random.uniform(lo, hi)
 
         self._rs_env.sim.data.qpos[self._door_hinge_qpos_adr] = angle
@@ -173,6 +186,7 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
         info               = dict(info or {})
         info["is_success"] = is_success
         info["door_angle"] = door_angle
+        info["custom_ready_to_retreat"] = getattr(self, "_ready_to_retreat", False)
         return self._flatten_obs(obs), reward, terminated, truncated, info
 
     def _calculate_reward(self, action, obs, rs_done, door_angle, prev_angle, just_succeeded):
@@ -197,34 +211,38 @@ class RoboSuiteDoorCloseGymnasiumEnv(gym.Env):
 
         returned = False
         if self.cfg.enable_return_stage and self._success_latched:
-            # 1) discourage re-opening
+            # 1) Discourage re-opening
             delta_open = max(0.0, door_angle - prev_angle)
             reward     -= self.cfg.w_door_regress * delta_open
 
-            # 2) retreat reward
-            if isinstance(obs, dict) and self._retreat_pos is not None:
-                cur          = obs["robot0_eef_pos"].astype(np.float32)
-                dist_retreat = float(np.linalg.norm(cur - self._retreat_pos))
-                reward       += self.cfg.w_return_pos * (1.0 - np.tanh(dist_retreat / 0.10))
-                returned     = dist_retreat < self.cfg.return_pos_tol
+            # 2) Retreat reward
+            if getattr(self, "_ready_to_retreat", False):
+                if isinstance(obs, dict) and self._retreat_pos is not None:
+                    cur          = obs["robot0_eef_pos"].astype(np.float32)
+                    dist_retreat = float(np.linalg.norm(cur - self._retreat_pos))
+                    reward       += self.cfg.w_return_pos * (1.0 - np.tanh(dist_retreat / 0.10))
+                    returned     = dist_retreat < self.cfg.return_pos_tol
 
-            # 3) Hold
-            if returned:
-                self._return_hold += 1
-            else:
-                self._return_hold = 0
+                # 3) Hold
+                if returned:
+                    self._return_hold += 1
+                else:
+                    self._return_hold = 0
 
-        reward     = float(np.clip(reward, -10.0, 10.0))
         terminated = False
-        if self.cfg.enable_return_stage and self._success_latched:
+        if self.cfg.enable_return_stage and self._success_latched and getattr(self, "_ready_to_retreat", False):
             if self._return_hold >= self.cfg.return_hold_steps:
                 terminated = True
+                reward += 500.0
+
+        if not terminated:
+            reward = float(np.clip(reward, -100.0, 100.0))
 
         truncated  = bool(self._step_count >= self.cfg.horizon)
 
         if bool(rs_done) and not terminated:
             truncated = True
-        
+
         return reward, terminated, truncated
 
     def render(self):
@@ -313,17 +331,17 @@ def train(cfg: TrainConfig):
     model = SAC(
         "MlpPolicy",
         env,
-        learning_rate=cfg.learning_rate,
-        buffer_size=cfg.buffer_size,
-        batch_size=cfg.batch_size,
-        gamma=cfg.gamma,
-        tau=cfg.tau,
-        learning_starts=cfg.learning_starts,
-        ent_coef=cfg.ent_coef,
-        policy_kwargs=dict(net_arch=list(cfg.policy_net_arch)),
-        tensorboard_log=cfg.tb_dir if _has_tensorboard() else None,
-        verbose=1,
-        seed=cfg.seed,
+        learning_rate   = cfg.learning_rate,
+        buffer_size     = cfg.buffer_size,
+        batch_size      = cfg.batch_size,
+        gamma           = cfg.gamma,
+        tau             = cfg.tau,
+        learning_starts = cfg.learning_starts,
+        ent_coef        = cfg.ent_coef,
+        policy_kwargs   = dict(net_arch=list(cfg.policy_net_arch)),
+        tensorboard_log = cfg.tb_dir if _has_tensorboard() else None,
+        verbose         = 1,
+        seed            = cfg.seed,
     )
 
     eval_env = DummyVecEnv([make_env_fn(cfg)])
@@ -336,13 +354,13 @@ def train(cfg: TrainConfig):
 
     eval_cb = EvalCallback(
         eval_env,
-        best_model_save_path=cfg.run_dir,
-        log_path=os.path.join(cfg.run_dir, "eval"),
-        eval_freq=10000,
-        n_eval_episodes=20,
-        deterministic=True,
-        render=False,
-        callback_on_new_best=SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")),
+        best_model_save_path = cfg.run_dir,
+        log_path             = os.path.join(cfg.run_dir, "eval"),
+        eval_freq            = 10000,
+        n_eval_episodes      = 20,
+        deterministic        = True,
+        render               = False,
+        callback_on_new_best = SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")),
     )
 
     model.learn(cfg.total_steps, callback=[SuccessRateCallback(), eval_cb])
@@ -431,11 +449,20 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
-    cfg = TrainConfig(seed=args.seed, run_dir=args.run_dir, tb_dir=args.tb_dir,
-        total_steps=args.total_steps, num_envs=args.num_envs, horizon=args.horizon, control_freq=args.control_freq,
-        reward_shaping=not args.no_reward_shaping, terminate_on_success=not args.no_terminate_on_success,
-        close_fraction=args.close_fraction,
-        init_open_min_fraction=args.init_open_min_fraction, init_open_max_fraction=args.init_open_max_fraction)
+    cfg = TrainConfig(
+        seed                   = args.seed,
+        run_dir                = args.run_dir,
+        tb_dir                 = args.tb_dir,
+        total_steps            = args.total_steps,
+        num_envs               = args.num_envs,
+        horizon                = args.horizon,
+        control_freq           = args.control_freq,
+        reward_shaping         = not args.no_reward_shaping,
+        terminate_on_success   = not args.no_terminate_on_success,
+        close_fraction         = args.close_fraction,
+        init_open_min_fraction = args.init_open_min_fraction,
+        init_open_max_fraction = args.init_open_max_fraction
+        )
 
     if args.play:
         if not args.model:

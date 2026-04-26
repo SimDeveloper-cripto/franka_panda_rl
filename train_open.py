@@ -210,17 +210,17 @@ class RoboSuiteDoorGymnasiumEnv(gym.Env):
         # ----------------------------
         returned = False
         if self.cfg.enable_return_stage and self._success_latched:
-            # 1) discourage door "regression"     (closing back after success)
+            # 1) Discourage door "regression" (closing back after success)
             # closing regression = negative delta (door_angle decreased)
             regress = max(0.0, -float(delta))
             r -= self.cfg.w_door_regress * regress
 
-            # 2) reward returning end-effector near start pose (if available)
+            # 2) Reward returning end-effector near start pose (if available)
             if isinstance(obs, dict) and (self._start_eef_pos is not None) and ("robot0_eef_pos" in obs):
                 cur = obs["robot0_eef_pos"].astype(np.float32)
                 dist = float(np.linalg.norm(cur - self._start_eef_pos))
 
-                # smooth positive reward, saturates when close
+                # Smooth positive reward, saturates when close
                 r += self.cfg.w_return_pos * float(1.0 - np.tanh(dist / max(1e-6, self.cfg.return_pos_tol)))
 
                 returned = dist < self.cfg.return_pos_tol
@@ -385,41 +385,41 @@ def train(cfg: TrainConfig):
               "If you want it: pip install tensorboard")
 
     model = SAC(
-        policy="MlpPolicy",
-        env=vec,
-        learning_rate=cfg.learning_rate,
-        buffer_size=cfg.buffer_size,
-        batch_size=cfg.batch_size,
-        gamma=cfg.gamma,
-        tau=cfg.tau,
-        train_freq=cfg.train_freq,
-        gradient_steps=cfg.gradient_steps,
-        learning_starts=cfg.learning_starts,
-        ent_coef=cfg.ent_coef,
-        policy_kwargs=policy_kwargs,
-        verbose=1,
-        tensorboard_log=tb_log,
-        seed=cfg.seed,
+        policy          = "MlpPolicy",
+        env             = vec,
+        learning_rate   = cfg.learning_rate,
+        buffer_size     = cfg.buffer_size,
+        batch_size      = cfg.batch_size,
+        gamma           = cfg.gamma,
+        tau             = cfg.tau,
+        train_freq      = cfg.train_freq,
+        gradient_steps  = cfg.gradient_steps,
+        learning_starts = cfg.learning_starts,
+        ent_coef        = cfg.ent_coef,
+        policy_kwargs   = policy_kwargs,
+        verbose         = 1,
+        tensorboard_log = tb_log,
+        seed            = cfg.seed,
     )
 
     callbacks = [
         SuccessRateCallback(log_every=5000),
         CheckpointCallback(
-            save_freq=max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
-            save_path=os.path.join(cfg.run_dir, "checkpoints"),
-            name_prefix="open_det",
-            save_replay_buffer=True,
-            save_vecnormalize=True,
+            save_freq               = max(1, cfg.checkpoint_freq // max(1, cfg.num_envs)),
+            save_path               = os.path.join(cfg.run_dir, "checkpoints"),
+            name_prefix             = "open_det",
+            save_replay_buffer      = True,
+            save_vecnormalize       = True,
         ),
         EvalCallback(
             eval_env,
-            best_model_save_path=cfg.run_dir,
-            log_path=os.path.join(cfg.run_dir, "eval"),
-            eval_freq=max(1, cfg.eval_freq // max(1, cfg.num_envs)),
-            n_eval_episodes=cfg.n_eval_episodes,
-            deterministic=True,
-            render=False,
-            callback_on_new_best=SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")) if cfg.vecnormalize else None,
+            best_model_save_path             = cfg.run_dir,
+            log_path                         = os.path.join(cfg.run_dir, "eval"),
+            eval_freq                        = max(1, cfg.eval_freq // max(1, cfg.num_envs)),
+            n_eval_episodes                  = cfg.n_eval_episodes,
+            deterministic                    = True,
+            render                           = False,
+            callback_on_new_best             = SaveVecNormalizeCallback(save_path=os.path.join(cfg.run_dir, "vecnormalize.pkl")) if cfg.vecnormalize else None,
         ),
     ]
 
@@ -496,16 +496,16 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     cfg  = TrainConfig(
-        total_steps=args.total_steps,
-        num_envs=args.num_envs,
-        seed=args.seed,
-        run_dir=args.run_dir,
-        tb_dir=args.tb_dir,
-        horizon=args.horizon,
-        control_freq=args.control_freq,
-        reward_shaping=not args.no_reward_shaping,
-        terminate_on_success=args.terminate_on_success,
-        success_fraction=float(args.success_fraction),
+        total_steps          = args.total_steps,
+        num_envs             = args.num_envs,
+        seed                 = args.seed,
+        run_dir              = args.run_dir,
+        tb_dir               = args.tb_dir,
+        horizon              = args.horizon,
+        control_freq         = args.control_freq,
+        reward_shaping       = not args.no_reward_shaping,
+        terminate_on_success = args.terminate_on_success,
+        success_fraction     = float(args.success_fraction),
     )
 
     if args.play:

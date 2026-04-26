@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Tuple
 from dataclasses import dataclass
 
+
 @dataclass
 class TrainConfig:
-    seed   : int = 42  # 123
-    run_dir: str = "runs/open_det" # "runs/door_sac"
+    seed   : int = 42
+    run_dir: str = "runs/open_det"
     tb_dir : str = "runs/tb"
 
     env_name    : str = "Door"
@@ -31,14 +32,14 @@ class TrainConfig:
     tau            : float = 0.005
     train_freq     : int   = 1
     gradient_steps : int   = 1
-    learning_starts: int   = 10_000
+    learning_starts: int   = 15_000
     ent_coef       : str   = "auto"
+
     policy_net_arch: Tuple[int, int] = (256, 256)
 
-    eval_freq      : int = 50_000
-    n_eval_episodes: int = 10
-    checkpoint_freq: int = 200_000
-
+    eval_freq       : int = 50_000
+    n_eval_episodes : int = 10
+    checkpoint_freq : int = 200_000
     success_fraction: float = 0.92
 
     w_progress   : float = 2.0
@@ -49,17 +50,14 @@ class TrainConfig:
 
     debug_print_every: int = 200
 
-    w_action_post_success = 0.06
-
-    # Post success: return to start
-    enable_return_stage: bool = True
-    w_return_pos       : float = 2.0
-    w_door_regress     : float = 4.0
-    return_pos_tol     : float = 0.05   # metri (tolleranza eef)
-    return_hold_steps  : int   = 10
+    w_action_post_success: float = 0.06
+    enable_return_stage  : bool  = True
+    w_return_pos         : float = 2.0
+    w_door_regress       : float = 4.0
+    return_pos_tol       : float = 0.05
+    return_hold_steps    : int   = 10
 
     action_deadband     : float = 0.02
     action_smooth_alpha : float = 0.2
-
-    freeze_on_return : bool = True
-    freeze_min_hold  : int  = 5
+    freeze_on_return    : bool  = True
+    freeze_min_hold     : int   = 5
