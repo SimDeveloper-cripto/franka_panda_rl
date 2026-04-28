@@ -94,25 +94,45 @@ graph TD
 L'agente SAC non apprende in un ambiente a scatola chiusa. Interagisce con un ambiente strutturato (la FSM) che filtra e calcola le ricompense, guidando l'apprendimento in modo stabile.
 
 ```mermaid
-graph LR
-    subgraph SB3 ["Stable Baselines 3 (train_gen.py)"]
-        ACTOR("Actor (Policy)") -->|Genera Azione| ENV
-        CRITIC("Critics (Q1, Q2)") -->|Apprendono dai Transiti| BUFFER
+graph TD
+    %% Definizione degli stili per chiarezza
+    classDef sb3 fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef env fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef buffer fill:#dfd,stroke:#333,stroke-width:1px;
+
+    subgraph AGENT ["Agente (Stable Baselines 3)"]
+        direction TB
+        ACTOR["Actor (Policy)"]
+        CRITIC["Critics (Q1, Q2)"]
     end
 
-    subgraph ENV ["Ambiente Robosuite (env_gen.py)"]
-        OBS["Spazio di Osservazione<br/>(112 features)"] -->|Stato Corrente| FSM
-        FSM{"FSM Manager<br/>(REACH/PUSH/HOLD/RETREAT)"} -->|Determina Fase| PH
-        PH["Fase Attiva"] -->|Isola e Calcola| REW["Calcolatore di Reward<br/>(Dense Shaping)"]
-        REW -->|Restituisce| SB3
-        OBS -->|Concatenato| SB3
+    subgraph ROBOT_ENV ["Ambiente (Robosuite + FSM)"]
+        direction TB
+        STEP["Passo Fisico (Simulazione)"]
+        FSM{"FSM Manager"}
+        REW["Reward Shaping"]
+        
+        STEP --> FSM
+        FSM --> REW
     end
 
-    subgraph BUFFER ["Replay Buffer"]
+    subgraph STORAGE ["Memoria"]
+        BUFFER[("Replay Buffer")]
     end
 
-    SB3 -- Azione (7 DoF) --> ENV
-    ENV -- Reward, Next Obs, Done --> SB3
+    %% Flusso Dati Lineare per il rendering
+    ACTOR ==>|Azione 7 DoF| STEP
+    REW -->|Reward + Next Obs| CRITIC
+    
+    %% Connessioni alla memoria
+    STEP -.->|Transizione| BUFFER
+    REW -.->|Reward| BUFFER
+    BUFFER -.->|Batch Sampling| AGENT
+
+    %% Assegnazione classi
+    class AGENT sb3;
+    class ROBOT_ENV env;
+    class STORAGE buffer;
 ```
 
 **Flusso Dati Dettagliato**
